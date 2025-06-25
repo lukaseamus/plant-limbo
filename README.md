@@ -1,4 +1,4 @@
-# Only macroalgal detritus can remain viable for months
+# Plants in limbo —— only macroalgal detritus can remain viable for months
 Repository accompanying Research in Context submission to special issue Plant Senescence in *Annals of Botany*
 
 This reporsitory contains two folders, one for the research component (`Seagrass`) and one for the context component (`Meta-analysis`):
