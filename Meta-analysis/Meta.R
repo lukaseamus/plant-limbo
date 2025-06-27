@@ -1,7 +1,10 @@
+# 1. Data ####
+# 1.1 Load data ####
 # Load and expand data using draws from the Gaussian distribution
 require(tidyverse)
+require(here)
 set.seed(100)
-meta <- read.csv("~/Desktop/Projects/Seagrass/Data/Meta.csv") %>%
+meta <- here("Meta-analysis", "Meta.csv") %>% read.csv() %>%
   rowwise() %>%
   mutate(Observation = if_else(
     !is.na(SEM),
@@ -19,7 +22,7 @@ meta %>%
   range()
 # diff = 0 so Mean and Observation are identical
 
-# Calculate metadata
+# 1.2 Calculate metadata ####
 meta %>% nrow()
 # 10566 observations
 
@@ -49,7 +52,7 @@ meta %>%
 # 6 freshwater plants
 # 66 terrestrial plants
 
-# Export table of species
+# 1.3 Export table of species ####
 meta %>% 
   group_by(Phylum, Order, Family, Species, Group) %>%
   summarise(Days = if_else(max(Day) < 100, 
@@ -58,7 +61,7 @@ meta %>%
             Studies = n_distinct(Reference),
             Observations = n()) %>%
   arrange(Phylum, Order, Family, Species) %>%
-  write.csv("~/Desktop/Species.csv", row.names = FALSE)
+  write.csv(here("Tables", "Species.csv"), row.names = FALSE)
 
 # Check that there are no highly improbable day ranges
 meta %>% 
@@ -68,6 +71,7 @@ meta %>%
             Minute_range = str_c(min(Day*24*60), max(Day*24*60), sep = "–"))
 # all looks good
 
+# 1.4 Transform data ####
 # Re-express data as a proportion of the initial value in the measurement series
 # or if there are multiple initial values as a proportion of their mean
 require(magrittr)
@@ -81,7 +85,7 @@ meta %<>%
   ungroup() %>%
   mutate(Group = fct_relevel(Group, "Terrestrial", "Freshwater", "Seagrass"))
 
-# Visually explore data
+# 1.5 Visually explore data ####
 meta %>%
   ggplot(aes(Day, Proportion)) +
     geom_point(alpha = 0.2, shape = 16) +
@@ -102,33 +106,15 @@ meta %>%
 meta %<>%
   mutate(group = fct((str_c(Group, Response, Light, sep = "_"))))
 
-# Prior simulation
-# k is informed by mean for seagrasses (0.22 d^-1) and kelp (0.12 d^-1)
-# if seagrasses are assumed to be intermediate between seaweeds and terrestrial plants,
-# k for terrestrial plants can be assumed to be about 0.3 to 0.4 and it is sensible to
-# pick the estimate for seagrasses as the central tendency for the prior
-# mu is informed by half the mean experimental duration
-meta %>%
-  group_by(Reference, Series) %>%
-  summarise(Days = max(Day)) %>%
-  ungroup() %$%
-  mean(Days)/2
-
-meta_prior <- 
-  tibble(n = 1:5e3,
-         k = rgamma(n = 5e3, shape = 0.22^2 / 0.3^2, rate = 0.22 / 0.3^2), 
-         mu = rgamma(n = 5e3, shape = 8^2 / 100^2, rate = 8 / 100^2)) %>%
-  filter(k * mu > 4) %>% # simulates constraining k and mu with a joint prior
-  expand_grid(Day = meta %$% seq(min(Day), max(Day), length.out = 1e3)) %>%
-  mutate(P_mu = 1 / ( 1 + exp( k * ( Day - mu ) ) ))
-
-meta_prior %>%
-  ggplot(aes(x = Day, y = P_mu, group = n)) +
-    geom_line(alpha = 0.05) +
-    coord_cartesian(expand = F, clip = "off") +
-    theme_minimal()
-# filtering method doesn't work well
-
+# 2. Prior simulation ####
+# There is no information on k and mu for plants at large. Consideirng that
+# the product of k and mu has to be aorund 5 for the logitsic curve to start
+# near its maximum at t0, ranges for k and mu can be reciprocally estimated.
+# For instance, I'd assume a reasonable range for mu is half a day to 3 years.
+# This would mean the maximum for k has to be around 5 / 0.5 = 10. For simplicity
+# the lower bound can be set to zero in both cases. To allow the posterior to
+# go beyond these estimated bounds, a truncated normal prior is better than
+# a uniform one.
 
 # prior simulation will also need to be done with the joint prior in Stan
 meta_prior_stan <- "
@@ -138,9 +124,11 @@ parameters{
 }
 
 model{
-  k ~ gamma( 0.22^2 / 0.3^2 , 0.22 / 0.3^2 );
-  mu ~ gamma( 8^2 / 100^2 , 8 / 100^2 );
-  target += gamma_lpdf( k * mu | 4^2 / 0.1^2 , 4 / 0.1^2 );
+  // k ~ uniform( 0 , 10 );
+  // mu ~ uniform( 0 , 1095 );
+  k ~ normal( 5 , 4 ) T[0,];
+  mu ~ normal( 365 , 300 ) T[0,];
+  target += normal_lpdf( log(k) + log(mu) | log(5) , 0.05 );
 }
 "
 require(cmdstanr)
@@ -156,32 +144,28 @@ meta_prior_draws <- meta_prior_samples$draws(format = "df")
 
 meta_prior_draws %>%
   ggplot() +
-    geom_density(aes(k), fill = "black", alpha = 0.5) +
-    geom_density(aes(rgamma( 8e4, 0.22^2 / 0.3^2 , 0.22 / 0.3^2 )),
-                 fill = "red", alpha = 0.5) +
+    geom_density(aes(k), fill = "black", alpha = 0.5, bw = 0.01) +
     scale_x_continuous(limits = c(0, 1), oob = scales::oob_keep) +
     theme_minimal()
 
 meta_prior_draws %>%
   ggplot() +
-    geom_density(aes(mu), fill = "black", alpha = 0.5) +
-    # geom_density(aes(rgamma( 8e4, 8^2 / 100^2 , 8 / 100^2 )),
-    #              fill = "red", alpha = 0.5) +
+    geom_density(aes(mu), fill = "black", alpha = 0.5, bw = 1) +
     scale_x_continuous(limits = c(0, 100), oob = scales::oob_keep) +
     theme_minimal()
 
 meta_prior_draws %>%
   slice_sample(n = 1e3) %>% # subsample
-  expand_grid(Day = meta %$% seq(min(Day), max(Day), length.out = 1e3)) %>%
+  expand_grid(Day = meta %$% seq(min(Day), max(Day), length.out = 1e4)) %>%
   mutate(P_mu = 1 / ( 1 + exp( k * ( Day - mu ) ) )) %>%
   ggplot(aes(x = Day, y = P_mu, group = .draw)) +
     geom_line(alpha = 0.05) +
     coord_cartesian(expand = F, clip = "off", 
-                    # xlim = c(0, 10)
+                    # xlim = c(0, 5)
                     ) +
     theme_minimal()
 
-
+# 3. Stan model ####
 meta_stan <- "
 data{
   int n;
@@ -202,26 +186,22 @@ parameters{
 
 model{
   // Group priors
-  k ~ gamma( 0.22^2 / 0.3^2 , 0.22 / 0.3^2 );
-  mu ~ gamma( 8^2 / 100^2 , 8 / 100^2 );
+  k ~ normal( 5 , 4 ) T[0,];
+  mu ~ normal( 365 , 300 ) T[0,];
   
   // Constraint on k and mu (joint prior)
-  target += gamma_lpdf( k .* mu | 4^2 / 0.1^2 , 4 / 0.1^2 );
+  target += normal_lpdf( log(k) + log(mu) | log(5) , 0.01 );
   
   // Likelihood uncertainty prior
   P_sigma ~ exponential( 1 );
 
   // Model
-  vector[n] P_mu;
-  for ( i in 1:n ) {
-    P_mu[i] = 1 / ( 1 + exp( k[group[i]] * ( Day[i] - mu[group[i]] ) ) );
-  }
+  vector[n] P_mu = 1 / ( 1 + exp( k[group] .* ( Day - mu[group] ) ) );
 
   // Likelihood
   Proportion ~ normal( P_mu , P_sigma );
 }
 "
-
 meta_mod <- cmdstan_model(stan_file = write_stan_file(code = meta_stan))
 
 require(tidybayes)
@@ -234,6 +214,7 @@ meta_samples <- meta_mod$sample(data = meta %>%
                                 iter_warmup = 1e4,
                                 iter_sampling = 1e4)
 
+# 4. Model checks ####
 meta_summary <- meta_samples$summary()
 meta_summary %>%
   filter(rhat > 1.001) # no rhat above 1.001
@@ -243,23 +224,10 @@ meta_draws <- meta_samples$draws(format = "df")
 require(bayesplot)
 meta_draws %>% mcmc_rank_overlay() # chains look good
 
-meta_draws %>% mcmc_pairs(pars = c("k[1]", "mu[1]")) # high correlation, but this is expected
-meta_draws %>% mcmc_pairs(pars = c("k[2]", "mu[2]")) # due to joint prior
-meta_draws %>% mcmc_pairs(pars = c("k[3]", "mu[3]"))
-meta_draws %>% mcmc_pairs(pars = c("k[4]", "mu[4]"))
-meta_draws %>% mcmc_pairs(pars = c("k[5]", "mu[5]"))
-meta_draws %>% mcmc_pairs(pars = c("k[6]", "mu[6]"))
-meta_draws %>% mcmc_pairs(pars = c("k[7]", "mu[7]"))
-meta_draws %>% mcmc_pairs(pars = c("k[8]", "mu[8]"))
-meta_draws %>% mcmc_pairs(pars = c("k[9]", "mu[9]"))
-meta_draws %>% mcmc_pairs(pars = c("k[10]", "mu[10]"))
-meta_draws %>% mcmc_pairs(pars = c("k[11]", "mu[11]"))
-meta_draws %>% mcmc_pairs(pars = c("k[12]", "mu[12]"))
-meta_draws %>% mcmc_pairs(pars = c("k[13]", "mu[13]"))
-# this is chosen as the optimal model
+meta_draws %>% mcmc_pairs(pars = c("k[1]", "mu[1]")) # strong correlation, but this is expected
+meta_draws %>% mcmc_pairs(pars = c("k[13]", "mu[13]")) # due to joint prior
 
-
-# Prior-posterior comparison
+# 5. Prior-posterior comparison ####
 meta_prior_posterior <- meta_samples %>%
   recover_types(meta %>% select(group)) %>%
   gather_draws(k[group], mu[group]) %>%
@@ -319,10 +287,11 @@ require(ggh4x)
 Fig_2_top <- meta_prior_posterior %>%
   ggplot() +
     geom_density_ridges(aes(.value, Response, colour = Treatment, fill = Treatment),
-                        quantile_lines = TRUE, quantiles = c(0.05, 0.1, 0.25, 0.75, 0.9, 0.95),
-                        alpha = 0.5, scale = 2, rel_min_height = 0.001,
-                        bandwidth = c(0.01, 0.1, 0.01, 0.1, 0.01, 0.6, 0.01, 10),
-                        from = rep(0, 8), to = c(1.5, 10, 1.5, 10, 1, 60, 1, 1000)) +
+                        # quantile_lines = TRUE, quantiles = c(0.05, 0.1, 0.25, 0.75, 0.9, 0.95),
+                        alpha = 0.5, scale = 2, rel_min_height = 0.002,
+                        bandwidth = c(2*0.02, 10*0.02, 2*0.02, 10*0.02, 
+                                      1.5*0.02, 40*0.02, 1.5*0.02, 1000*0.02),
+                        from = rep(0, 8), to = c(2, 10, 2, 10, 1.5, 40, 1.5, 1000)) +
     scale_colour_manual(values = c("#b5b8ba", "#f5a54a", "#2e4a5b")) +
     scale_fill_manual(values = c("#b5b8ba", "#f5a54a", "#2e4a5b")) +
     scale_y_discrete(labels = c("Chlorophyll" = "Chl", "Photosynthesis" = "P", "Prior" = "")) +
@@ -333,25 +302,30 @@ Fig_2_top <- meta_prior_posterior %>%
                                      label_parsed))
                  ) +
     facetted_pos_scales(x = list(
-      Group == "Terrestrial plants" & .variable == "k" ~ scale_x_continuous(limits = c(0, 1.5),
-                                                                            breaks = seq(0, 1.5, by = 0.5),
-                                                                            labels = scales::label_number(accuracy = c(1, 0.1, 1, 0.1))),
+      Group == "Terrestrial plants" & .variable == "k" ~ scale_x_continuous(limits = c(0, 2),
+                                                                            breaks = seq(0, 2, by = 1),
+                                                                            oob = scales::oob_keep),
       Group == "Terrestrial plants" & .variable == "mu" ~ scale_x_continuous(limits = c(0, 10),
                                                                              breaks = seq(0, 10, by = 5)),
-      Group == "Freshwater plants" & .variable == "k" ~ scale_x_continuous(limits = c(0, 1.5),
-                                                                           breaks = seq(0, 1.5, by = 0.5),
-                                                                           labels = scales::label_number(accuracy = c(1, 0.1, 1, 0.1))),
+      Group == "Freshwater plants" & .variable == "k" ~ scale_x_continuous(limits = c(0, 2),
+                                                                           breaks = seq(0, 2, by = 1),
+                                                                           oob = scales::oob_keep),
       Group == "Freshwater plants" & .variable == "mu" ~ scale_x_continuous(limits = c(0, 10),
-                                                                            breaks = seq(0, 10, by = 5)),
-      Group == "Seagrasses" & .variable == "k" ~ scale_x_continuous(limits = c(0, 1),
-                                                                    breaks = seq(0, 1, by = 0.5),
-                                                                    labels = scales::label_number(accuracy = c(1, 0.1, 1))),
-      Group == "Seagrasses" & .variable == "mu" ~ scale_x_continuous(limits = c(0, 60),
-                                                                     breaks = seq(0, 60, by = 30)),
-      Group == "Seaweeds" & .variable == "k" ~ scale_x_continuous(limits = c(0, 1),
-                                                                  breaks = seq(0, 1, by = 0.5),
-                                                                  labels = scales::label_number(accuracy = c(1, 0.1, 1))),
+                                                                            breaks = seq(0, 10, by = 5),
+                                                                            oob = scales::oob_keep),
+      Group == "Seagrasses" & .variable == "k" ~ scale_x_continuous(limits = c(0, 1.5),
+                                                                    breaks = seq(0, 1.5, by = 0.5),
+                                                                    oob = scales::oob_keep,
+                                                                    labels = scales::label_number(accuracy = c(1, 0.1, 1, 0.1))),
+      Group == "Seagrasses" & .variable == "mu" ~ scale_x_continuous(limits = c(0, 40),
+                                                                     breaks = seq(0, 40, by = 20),
+                                                                     oob = scales::oob_keep),
+      Group == "Seaweeds" & .variable == "k" ~ scale_x_continuous(limits = c(0, 1.5),
+                                                                  breaks = seq(0, 1.5, by = 0.5),
+                                                                  oob = scales::oob_keep,
+                                                                  labels = scales::label_number(accuracy = c(1, 0.1, 1, 0.1))),
       Group == "Seaweeds" & .variable == "mu" ~ scale_x_continuous(limits = c(0, 1000),
+                                                                   oob = scales::oob_keep,
                                                                    breaks = seq(0, 1000, by = 500))
     )) +
     coord_cartesian(expand = FALSE) +
@@ -361,12 +335,9 @@ Fig_2_top <- meta_prior_posterior %>%
           axis.ticks.y = element_blank(),
           axis.text.y = element_text(face = "italic"),
           plot.margin = margin(0, 0.5, 0.5, 0, unit = "cm"))
+Fig_2_top
 
-ggsave(plot = Fig_2_top, filename = "meta_prior_posterior.pdf", device = cairo_pdf, path = "~/Desktop",
-       width = 20, height = 6, units = "cm")
-
-
-# Parameters and differences
+# 6. Parameters and differences ####
 # Export parameters for Table 2
 meta_prior_posterior %>%
   filter(Response != "Prior") %>%
@@ -374,14 +345,14 @@ meta_prior_posterior %>%
   group_by(Group, Response, Treatment, .variable) %>%
   summarise(mean = mean(.value),
             sd = sd(.value),
-            n = length(.value)) %>%
+            n = n()) %>%
   mutate(rounded = paste( # 2 significant figures except for very large numbers
     if_else(mean < 100, signif(mean, digits = 2), signif(mean, digits = 3)), "±",
     if_else(sd < 100, signif(sd, digits = 2), signif(sd, digits = 3))
                         )
          ) %>%
   pivot_wider(names_from = c(Response, Treatment), values_from = c(mean, sd, rounded)) %>%
-  write.csv("~/Desktop/meta_para.csv", row.names = FALSE)
+  write.csv(here("Tables", "meta_para.csv"), row.names = FALSE)
 
 # Calculate differences for Table 2
 meta_diff <- meta_samples %>%
@@ -413,7 +384,8 @@ meta_diff <- meta_samples %>%
          ) %>%
   select(.chain, .iteration, .draw, starts_with("delta")) %>%
   pivot_longer(cols = -c(.chain, .iteration, .draw),
-               names_to = "Contrast", values_to = "Difference", names_prefix = "delta_")
+               names_to = "Contrast", values_to = "Difference", names_prefix = "delta_") %T>%
+  print()
 
 # Export differences and probabilities for Table 2
 meta_diff %>%
@@ -422,7 +394,7 @@ meta_diff %>%
             sd = sd(Difference),
             P_less = mean(Difference < 0),
             P_more = mean(Difference > 0),
-            n = length(Difference)) %>%
+            n = n()) %>%
   mutate(rounded = paste( # 2 significant figures except for very large numbers
     if_else(mean < 100, signif(abs(mean), digits = 2), signif(abs(mean), digits = 3)), "±",
     if_else(sd < 100, signif(sd, digits = 2), signif(sd, digits = 3))
@@ -435,7 +407,7 @@ meta_diff %>%
          Group = fct_relevel(Group, "Terrestrial", "Freshwater", "Seagrass"),
          Contrast = fct_relevel(Contrast, "Photosynthesis", "Chlorophyll", "Light")) %>%
   arrange(Group, Contrast, Parameter) %>%
-  write.csv("~/Desktop/meta_diff.csv", row.names = FALSE)
+  write.csv(here("Tables", "meta_diff.csv"), row.names = FALSE)
 
 # Calculate differences between plant groups for text
 meta_diff_group <- meta_samples %>%
@@ -477,7 +449,8 @@ meta_diff_group <- meta_samples %>%
   ) %>%
   select(.chain, .iteration, .draw, starts_with("delta")) %>%
   pivot_longer(cols = -c(.chain, .iteration, .draw),
-               names_to = "Contrast", values_to = "Difference", names_prefix = "delta_")
+               names_to = "Contrast", values_to = "Difference", names_prefix = "delta_") %T>%
+  print()
 
 # Export differences and probabilities for text
 meta_diff_group %>%
@@ -486,7 +459,7 @@ meta_diff_group %>%
             sd = sd(Difference),
             P_less = mean(Difference < 0),
             P_more = mean(Difference > 0),
-            n = length(Difference)) %>%
+            n = n()) %>%
   mutate(rounded = paste( # 2 significant figures except for very large numbers
     if_else(mean < 100, signif(abs(mean), digits = 2), signif(abs(mean), digits = 3)), "±",
     if_else(sd < 100, signif(sd, digits = 2), signif(sd, digits = 3))
@@ -501,10 +474,10 @@ meta_diff_group %>%
          First = fct_relevel(First, "Terrestrial", "Freshwater", "Seagrass"),
          Second = fct_relevel(Second, "Freshwater", "Seagrass", "Seaweed")) %>%
   arrange(Response, Treatment, First, Second, Parameter) %>%
-  write.csv("~/Desktop/meta_diff_group.csv", row.names = FALSE)
+  write.csv(here("Tables", "meta_diff_group.csv"), row.names = FALSE)
 
+# 7. Prediction ####
 # calculate P_mu from parameters
-
 meta_renamed <- meta %>%
   rename("Treatment" = Light) %>%
   mutate(Group = case_when(
@@ -524,10 +497,12 @@ meta_mu <- meta_prior_posterior %>%
             by = c("Group", "Response", "Treatment")) %>%
   mutate(Days = if_else(is.na(Days), 320, Days)) %>% # 320 days is the maximum required range
   rowwise() %>% # this is necessary because Days needs to be called separately for each row
-  mutate(Day = if_else(Response == "Prior",
-                       list( c(seq(0, Days * 0.035, length.out = 50), # Prior will be plotted on multiple scales
-                               seq(Days * 0.035 + 1, Days, length.out = 50)) ), # so needs higher resolution at lower values
-                       list( seq(0, Days, length.out = 100) ) 
+  mutate(Day = case_when(
+    Response == "Prior" ~ list( c(seq(0, Days * 0.01, length.out = 50), # Prior will be plotted on multiple scales
+                                  seq(Days * 0.01 + 1, Days, length.out = 50)) ), # so needs higher resolution at lower values
+    Group %in% c("Terrestrial plants", "Freshwater plants") &
+      Response == "Chlorophyll" & Treatment == "Dark" ~ list( seq(0, Days * 0.2, length.out = 100) ),
+    TRUE ~ list( seq(0, Days, length.out = 100) ) 
                        )) %>%
   unnest(Day) %>% # expand the list column Day
   mutate(P_mu = 1 / ( 1 + exp( k * ( Day - mu ) ) ) )
@@ -576,6 +551,7 @@ Fig_2_middle <- ggplot() +
                   mytheme +
                   theme(axis.title.x = element_blank(),
                         strip.text = element_blank())
+Fig_2_middle
 
 Fig_2_bottom <- ggplot() +
                   geom_point(data = meta_renamed %>%
@@ -612,14 +588,13 @@ Fig_2_bottom <- ggplot() +
                   coord_cartesian(ylim = c(0, 1), expand = FALSE) +
                   mytheme +
                   theme(strip.text = element_blank())
+Fig_2_bottom
 
 require(patchwork)
 Fig_2 <- ( (Fig_2_top + theme(legend.position = c(0.14, -1.35))) / Fig_2_middle / Fig_2_bottom ) +
   plot_layout(heights = c(0.4, 1, 1))
 # ignore legend.position warning: legend.position.inside will not produce the same result
 
-ggsave(plot = Fig_2, filename = "Fig_2.pdf", device = cairo_pdf, path = "~/Desktop",
+ggsave(plot = Fig_2, filename = "Fig_2.pdf", 
+       device = cairo_pdf, path = "Figures",
        width = 20, height = 15, units = "cm")
-
-
-
