@@ -19,38 +19,8 @@ O2_list <- O2 %>%
   map(~ select(., Value, delta_t_c) %>%
         compose_data())
 
-O2_stan <- "
-data{
-  int n;
-  vector<lower=0>[n] Value;
-  vector[n] delta_t_c;
-}
-
-parameters{
-  real<lower=0> alpha;
-  real beta;
-  real<lower=0> sigma;
-}
-
-model{
-  // Priors (from Rose et al. 2012, doi 10.5194/os-8-545-2012 and Woo & Pattiaratchi 2008, doi 10.1016/j.dsr.2008.05.005)
-  alpha ~ gamma( 227.9194^2 / 20^2, 227.9194 / 20^2 ); // reparameterised with mean and sd
-  beta ~ normal( 0, 5 );
-  sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] mu;
-  for ( i in 1:n ) {
-    mu[i] = alpha + beta * delta_t_c[i];
-  }
-
-  // Likelihood
-  Value ~ normal( mu , sigma );
-}
-"
-
 require(cmdstanr)
-O2_mod <- cmdstan_model(stan_file = write_stan_file(code = O2_stan))
+O2_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "O2.stan")))
 
 O2_samples <- O2_list %>%
   map(~ O2_mod$sample(data = .,
@@ -181,34 +151,7 @@ V <- here("Seagrass", "Volume.csv") %>% read.csv() %>%
   mutate(Vs = (Volume - mean(Volume)) / sd(Volume)) # standardise Volume
 
 # 2.2 Stan model #### 
-V_stan <- "
-data{
-  int n;
-  vector[n] Vs;
-}
-
-parameters{
-  real Vsmu;
-  real<lower=0> sigma;
-}
-
-model{
-  // Priors
-  Vsmu ~ normal( 0, 1 );
-  sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] mu;
-  for ( i in 1:n ) {
-    mu[i] = Vsmu;
-  }
-
-  // Likelihood
-  Vs ~ normal( mu , sigma );
-}
-"
-
-V_mod <- cmdstan_model(stan_file = write_stan_file(code = V_stan))
+V_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "V.stan")))
 
 V_samples <- V_mod$sample(data = compose_data(V),
                           seed = 100,
@@ -281,34 +224,7 @@ T_list <- O2 %>%
         compose_data())
 
 # 4.2 Stan model ####
-T_stan <- "
-data{
-  int n;
-  vector[n] Ts;
-}
-
-parameters{
-  real Tsmu;
-  real<lower=0> sigma;
-}
-
-model{
-  // Priors
-  Tsmu ~ normal( 0, 1 );
-  sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] mu;
-  for ( i in 1:n ) {
-    mu[i] = Tsmu;
-  }
-
-  // Likelihood
-  Ts ~ normal( mu , sigma );
-}
-"
-
-T_mod <- cmdstan_model(stan_file = write_stan_file(code = T_stan))
+T_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "T.stan")))
 
 T_samples <- T_list %>%
   map(~ T_mod$sample(data = .,
@@ -459,39 +375,7 @@ M_prior %>%
 # prior simulation looks good
 
 # 6.4 Stan model ####
-M_stan <- "
-data{
-  int n;
-  int n_Species;
-  vector<lower=0>[n] Mass;
-  vector[n] Day_c;
-  array[n] int Species;
-}
-
-parameters{
-  vector<lower=0>[n_Species] alpha;
-  vector[n_Species] beta;
-  real<lower=0> sigma;
-}
-
-model{
-  // Priors
-  alpha ~ gamma( 0.52^2 / 0.25^2, 0.52 / 0.25^2 ); // reparameterised with mean and sd
-  beta ~ normal( 0, 0.01 );
-  sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] mu;
-  for ( i in 1:n ) {
-    mu[i] = alpha[Species[i]] + beta[Species[i]] * Day_c[i];
-  }
-
-  // Likelihood
-  Mass ~ normal( mu , sigma );
-}
-"
-
-M_mod <- cmdstan_model(stan_file = write_stan_file(code = M_stan))
+M_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "M.stan")))
 
 M_samples <- M_mod$sample(data = M %>%
                             select(Mass, Day_c, Species) %>%
@@ -737,72 +621,7 @@ Pm_prior %>%
 # covers all probable scenarios
 
 # 7.6.3 Stan model ####
-Pm_confound_stan <- "
-data{
-  int n;
-  vector[n] Pm_mean;
-  vector[n] Pm_sd;
-  vector[n] O2_mean_std;
-  vector[n] O2_sd_std;
-  vector[n] T_mean_std;
-  vector[n] T_sd_std;
-  vector[n] P_mean_std;
-  vector[n] S_std;
-  vector[n] M_std;
-}
-
-parameters{
-  // True estimates for measurement error
-  vector[n] Pm;
-  vector[n] O2;
-  vector[n] T;
-
-  // Intercept parameter
-  real<lower=0> alpha;
-
-  // Slope parameters
-  real beta_O2;
-  real beta_T;
-  real beta_P;
-  real beta_S;
-  real beta_M;
-
-  // Likelihood uncertainty parameter
-  real<lower=0> Pm_sigma;
-}
-
-model{
-  // Predictor measurement error
-  O2 ~ normal( 0 , 1 );
-  O2_mean_std ~ normal( O2 , O2_sd_std );
-  T ~ normal( 0 , 1 );
-  T_mean_std ~ normal( T , T_sd_std );
-
-  // Intercept and slope priors
-  alpha ~ gamma( 20^2 / 10^2 , 20 / 10^2 );
-  beta_O2 ~ normal( 0 , 1 );
-  beta_T ~ normal( 0 , 1 );
-  beta_P ~ normal( 0 , 1 );
-  beta_S ~ normal( 0 , 1 );
-  beta_M ~ normal( 0 , 1 );
-
-  // Likelihood uncertainty prior
-  Pm_sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] Pm_mu;
-  for ( i in 1:n ) {
-    Pm_mu[i] = alpha + beta_O2 * O2[i] + beta_T * T[i] +
-    beta_P * P_mean_std[i] + beta_S * S_std[i] + beta_M * M_std[i];
-  }
-
-  // Likelihood incorporating measurement error
-  Pm ~ normal( Pm_mu , Pm_sigma );
-  Pm_mean ~ normal( Pm , Pm_sd );
-}
-"
-
-Pm_confound_mod <- cmdstan_model(stan_file = write_stan_file(code = Pm_confound_stan))
+Pm_confound_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "Pm_confound.stan")))
 
 Pm_confound_samples <- Pm_confound_mod$sample(data = P_summary %>%
                                                 select(Pm_mean, Pm_sd, O2_mean_std, O2_sd_std,
@@ -1454,80 +1273,7 @@ Pm_prior_posterior %>%
 # to parameterise k in terms of k*mu to avoid crazy tails on mu.
 
 # 7.7.5 Improved Stan model ####
-Pm_stan <- "
-data{
-  int n;
-  int n_Species;
-  vector[n] Pm_mean;
-  vector[n] Pm_sd;
-  vector[n] Day;
-  array[n] int Species;
-}
-
-parameters{
-  // Estimate of Pm for measurment error
-  vector[n] Pm;
-
-  // Species parameters
-  vector<lower=0>[n_Species] alpha;
-  vector<lower=0>[n_Species] tau;
-  vector<lower=0>[n_Species] mu;
-
-  // Pooled parameters
-  real<lower=0> alpha_mu;
-  real<lower=0> tau_mu;
-  real<lower=0> mu_mu;
-  real<lower=0> kmu; // complete pooling on kmu
-
-  real<lower=0> alpha_theta;
-  real<lower=0> tau_theta;
-  real<lower=0> mu_theta;
-
-  // Likelihood uncertainty parameter
-  real<lower=0> Pm_sigma;
-}
-
-transformed parameters{
-  vector<lower=0>[n_Species] k = kmu ./ mu;
-}
-
-model{
-  // Pooled priors
-  alpha_mu ~ gamma( 30^2 / 5^2 , 30 / 5^2 );
-  tau_mu ~ gamma( 2^2 / 1^2 , 2 / 1^2 ); // reduced sd because variation is added by theta
-  mu_mu ~ gamma( 25^2 / 10^2 , 25 / 10^2 ); // estimated as 5/0.2
-  kmu ~ gamma( 5^2 / 1^2 , 5 / 1^2 );
-
-  alpha_theta ~ exponential( 1 );
-  tau_theta ~ exponential( 1 );
-  mu_theta ~ exponential( 1 ); 
-
-  // Species priors
-  alpha ~ gamma( alpha_mu / alpha_theta , 1 / alpha_theta );
-  tau ~ gamma( tau_mu / tau_theta , 1 / tau_theta );
-  mu ~ gamma( mu_mu / mu_theta , 1 / mu_theta );
-
-  // Likelihood uncertainty prior
-  Pm_sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] Pm_mu = ( alpha[Species] + tau[Species] ) ./
-    ( 1 + exp( k[Species] .* ( Day - mu[Species] ) ) ) 
-    - tau[Species];
-
-  // Likelihood incorporating measurement error
-  Pm ~ normal( Pm_mu , Pm_sigma );
-  Pm_mean ~ normal( Pm , Pm_sd );
-}
-
-generated quantities {
-  real alpha_new = gamma_rng( alpha_mu / alpha_theta , 1 / alpha_theta );
-  real tau_new = gamma_rng( tau_mu / tau_theta , 1 / tau_theta );
-  real mu_new = gamma_rng( mu_mu / mu_theta , 1 / mu_theta );
-  real k_new = kmu / mu_new;
-}
-"
-Pm_mod <- cmdstan_model(stan_file = write_stan_file(code = Pm_stan))
+Pm_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "Pm.stan")))
 
 Pm_samples <- Pm_mod$sample(data = P_summary %>%
                               select(Pm_mean, Pm_sd, Day, Species) %>%
@@ -1821,70 +1567,7 @@ Prior %>%
     theme_minimal()
 
 # 7.8.2 Stan model ####
-Pl_stan <- "
-data{
-  int n;
-  int n_Species;
-  vector[n] Pl_mean;
-  vector[n] Pl_sd;
-  vector[n] Day;
-  array[n] int Species;
-}
-
-parameters{
-  // Estimate of Pl for measurment error
-  vector[n] Pl;
-
-  // Species parameters
-  vector<lower=0>[n_Species] alpha; // no pooling on alpha
-  vector<lower=0>[n_Species] tau; // no pooling on tau
-  vector<lower=0>[n_Species] mu;
-
-  // Pooled parameters
-  real<lower=0> mu_mu;
-  real<lower=0> kmu; // complete pooling on kmu
-
-  real<lower=0> mu_theta;
-
-  // Likelihood uncertainty parameter
-  real<lower=0> Pl_sigma;
-}
-
-transformed parameters{
-  vector<lower=0>[n_Species] k = kmu ./ mu;
-}
-
-model{
-  // Pooled priors
-  mu_mu ~ gamma( 25^2 / 10^2 , 25 / 10^2 ); // estimated as 5 / 0.2
-  kmu ~ gamma( 5^2 / 1^2 , 5 / 1^2 );
-
-  mu_theta ~ exponential( 1 ); 
-
-  // Species priors
-  alpha ~ gamma( 16^2 / 4^2 , 16 / 4^2 );
-  tau ~ gamma( 1^2 / 0.8^2 , 1 / 0.8^2 );
-  mu ~ gamma( mu_mu / mu_theta , 1 / mu_theta );
-
-  // Likelihood uncertainty prior
-  Pl_sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] Pl_mu = ( alpha[Species] + tau[Species] ) ./
-    ( 1 + exp( k[Species] .* ( Day - mu[Species] ) ) ) 
-    - tau[Species];
-
-  // Likelihood incorporating measurement error
-  Pl ~ normal( Pl_mu , Pl_sigma );
-  Pl_mean ~ normal( Pl , Pl_sd );
-}
-
-generated quantities {
-  real mu_new = gamma_rng( mu_mu / mu_theta , 1 / mu_theta );
-  real k_new = kmu / mu_new;
-}
-"
-Pl_mod <- cmdstan_model(stan_file = write_stan_file(code = Pl_stan))
+Pl_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Stan", "Pl.stan")))
 
 Pl_samples <- Pl_mod$sample(data = P_summary %>%
                               select(Pl_mean, Pl_sd, Day, Species) %>%
