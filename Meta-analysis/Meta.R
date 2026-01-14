@@ -1,36 +1,124 @@
 # 1. Data ####
 # 1.1 Load data ####
-# Load and expand data using draws from the Gaussian distribution
 require(tidyverse)
+require(magrittr)
 require(here)
-set.seed(100)
-meta <- here("Meta-analysis", "Meta.csv") %>% read.csv() %>%
-  rowwise() %>%
-  mutate(Observation = if_else(
-    !is.na(SEM),
-    list( rnorm( N , Mean , SEM * sqrt(N) ) ),
-    list( Mean )
-    )) %>%
-  unnest(Observation)
-# warnings can be safely ignored (I tested this with a longer method using filter)
+meta <- here("Meta-analysis", "Meta.csv") %>% 
+  read_csv(
+    col_types = list(
+      "f", "c", "f", "f", "f", "f",
+      "f", "f", "f", "f", "d", "d",
+      "d", "d", "f", "f", "c", "c"
+    )
+  ) %T>%
+  print()
 
-# Mean and Observation should be identical for rows with only one observation
+meta %>% distinct(Reference, Series)
+# There are 551 unique reference-series combinations,
+# that is 551 unique experiments across studies.
+
+# Check that series are not repeated in reference
 meta %>%
-  filter(is.na(SEM)) %>%
-  mutate(diff = Mean - Observation) %>%
-  pull(diff) %>%
-  range()
-# diff = 0 so Mean and Observation are identical
+  group_by(Reference) %>%
+  mutate(
+    block = ( Series != Series %>% 
+                lag(default = first(Series)) ) %>%
+      cumsum()
+  ) %>%
+  distinct(Reference, Series, block) %>%
+  count(Reference, Series) %>%
+  filter(n > 1)
+# Every series in reference matches one block, 
+# so e.g. series 1 only exists once in any
+# given reference.
 
-# 1.2 Calculate metadata ####
+# Check that there are no highly improbable day ranges
+meta %>% 
+  group_by(Species) %>%
+  summarise(Day_range = str_c(min(Day), max(Day), sep = "–"),
+            Hour_range = str_c(min(Day*24), max(Day*24), sep = "–"),
+            Minute_range = str_c(min(Day*24*60), max(Day*24*60), sep = "–")) %>%
+  print(n = 100)
+# All looks reasonable.
+
+meta %$% any(is.na(N)) # Sample size contains no NAs
+
+# 1.2 Simulate observations ####
+# Expand data using draws from probability distributions
+meta %>% distinct(Response, Method)
+# Most of these response variables are restricted to positive
+# numbers, so are best simulated using a gamma distribution.
+meta %>% distinct(Method, Unit) %>% arrange(Method) %>% print(n = 70)
+# Some are also bounded above, such as Fv/Fm, so are best simulated using 
+# a beta distribution. However, % of initial, % of total and proportion 
+# of initial are not true proportions because they may exceed 100% and 1
+# respectively when photosynthesis increases after excision:
+meta %>% filter(Unit %>% str_detect("%")) %$% max(Mean)
+meta %>% filter(Unit %>% str_detect("Prop")) %$% max(Mean)
+# so they are best described by a gamma distribution. Gas exchange should
+# be simulated with a normal distribution because cases of net gas exchange 
+# can be negative.
+# Now the problem is that Mean = 0 is reported for some cases of Fv/Fm:
+meta %>% filter(!is.na(SEM) & N > 1 & Method != "Gas exchange" & Mean <= 0)
+# This precludes using the beta distribution. In addition, beta only allows 
+# SEM < sqrt( Mean * (1 - Mean ) / N ) which is violated in more cases:
+meta %>%
+  filter(!is.na(SEM) & N > 1 & Unit == "Fv/Fm") %>% 
+  mutate(SEM_max = sqrt( Mean * (1 - Mean) / N )) %>%
+  filter(SEM >= SEM_max)
+# Hence for simulations from beta, I would need to enforce Mean > 0 
+# and SEM < sqrt( Mean * (1 - Mean ) / N ). The alternative would be a
+# truncated normal bounded by 0 and 1 but this does not correctly
+# represent the generative distribution that could have resulted
+# in the observed Mean and SEM. If I enforce a maximal SEM < SEM_max,
+# but close to SEM_max, the beta distribution only predicts values 
+# near 0 and 1, so the truncated normal distribution is likely still
+# more representative of Fv/Fm observations.
+
+# Draw from probability distributions
+require(extraDistr) # R doesn't have a built-in truncated normal
+set.seed(100) # Ensure reproducibility of simulation
+meta %<>%
+  rowwise() %>%
+  mutate(
+    Observation = if( !is.na(SEM) & N > 1 ){ # Cases with summaries of observations
+      SD <- SEM * sqrt(N) # Calculate standard deviation
+      if( Method == "Gas exchange" ){ # Cases of gas exchange that may be negative
+        list( rnorm( N , Mean , SD ) )
+      } else if( Unit == "Fv/Fm" ){ # Fv/Fm is bounded by 0 and 1
+        list( rtnorm( N , Mean , SD , 0 , 1 ) )
+      } else { # All other cases are positive but otherwise unbounded
+        list( rgamma( N , Mean^2 / SD^2 , Mean / SD^2 ) )
+      }
+    } else { # Cases with raw observations
+      list( Mean )
+    }
+  ) %>%
+  unnest(Observation) %T>%
+  print()
+
+meta %$% all(is.finite(Observation)) # No NAs or NaNs or Infs
+
+# Mean and Observation should be identical 
+# for rows with only one observation
+meta %>%
+  filter(is.na(SEM) & N == 1) %>%
+  filter(Mean != Observation)
+# Mean and Observation are identical
+
+# 1.3 Calculate metadata ####
 meta %>% nrow()
-# 10566 observations
+# 10646 observations
+
+meta %>% group_by(Reference) %>% 
+  pull(Series) %>% as.numeric() %>% median()
+# median of 3 timeseries/experiments per study
 
 meta %>% group_by(Reference, Series) %>% n_groups()
-# 535 measurement series
+# 551 timeseries/experiments in total
 
 meta %>% group_by(Reference) %>% n_groups()
-# 127 studies
+# 129 studies
 
 meta %>% group_by(Species) %>% n_groups()
 # 92 species
@@ -46,179 +134,493 @@ meta %>% group_by(Phylum) %>% n_groups()
 
 meta %>% 
   group_by(Group) %>% 
-  summarise(Species = n_distinct(Species))
-# 15 seaweeds
+  summarise(Species = n_distinct(Species)) %>%
+  arrange(Species)
 # 5 seagrasses
 # 6 freshwater plants
+# 15 seaweeds
 # 66 terrestrial plants
 
-# 1.3 Export table of species ####
+meta %>% 
+  group_by(Group) %>% 
+  summarise(References = n_distinct(Reference)) %>%
+  arrange(References)
+# 4 studies on seagrasses
+# 12 on freshwater plants
+# 17 on seaweeds
+# 98 on terrestrial plants
+
+
+# 1.4 Export table of species ####
 meta %>% 
   group_by(Phylum, Order, Family, Species, Group) %>%
-  summarise(Days = if_else(max(Day) < 100, 
-                           signif(max(Day), digits = 2), 
-                           signif(max(Day), digits = 3)),
-            Studies = n_distinct(Reference),
-            Observations = n()) %>%
+  summarise(
+    Days = if_else(
+      max(Day) < 100, 
+      signif(max(Day), digits = 2), 
+      signif(max(Day), digits = 3)
+    ),
+    Studies = n_distinct(Reference),
+    Experiments = n_distinct(Reference, Series),
+    Observations = n()
+  ) %>%
   arrange(Phylum, Order, Family, Species) %>%
-  write.csv(here("Tables", "Species.csv"), row.names = FALSE)
+  write_csv(here("Tables", "Species.csv"))
 
-# Check that there are no highly improbable day ranges
-meta %>% 
-  group_by(Species) %>%
-  summarise(Day_range = str_c(min(Day), max(Day), sep = "–"),
-            Hour_range = str_c(min(Day*24), max(Day*24), sep = "–"),
-            Minute_range = str_c(min(Day*24*60), max(Day*24*60), sep = "–"))
-# all looks good
+# 1.5 Transform data ####
+# Data need to be re-expressed as the ratio of the final
+# to the initial value in each measurement. This assumes
+# that the initial value in the timeseries is representative
+# of baseline photosynthesis.
 
-# 1.4 Transform data ####
-# Re-express data as a proportion of the initial value in the measurement series
-# or if there are multiple initial values as a proportion of their mean
-require(magrittr)
+meta %>%
+  group_by(Reference, Series) %>%
+  filter(Day == min(Day)) %>%
+  distinct(Reference, Series, Day) %>%
+  ungroup() %>%
+  count(Day == 0)
+# Most timeseries indeed start with t = 0.
+
+meta %>%
+  group_by(Reference, Series) %>%
+  slice(1) %>%
+  ungroup() %>%
+  count(Day == 0)
+# This yields the same result so all
+# series start with the minimum value.
+
+meta %>%
+  group_by(Reference, Series) %>%
+  slice(1) %>%
+  ungroup() %>%
+  filter(Day > 0) %>%
+  distinct(Reference, Species, Day) %>%
+  arrange(desc(Day))
+# The greatest delay is 9 days for Frontier et al. 2021,
+# but since this study is on Laminaria which was kelp under
+# natural conditions with flowing seawater, I expect 9 days 
+# after excision to be representative of the baseline.
+# The only other studies that delayed measurement for over 1 day
+# are Asim et al. 2022 and Karatas et al. 2010. These studies
+# are perhaps more concerning because they are on terrestrial 
+# plants which I expect lose photosynthesis more quickly. But
+# given that the experimental duration was 56 days in the first
+# case and 6-7 days in the second case, I am willing to accept 
+# these data.
+
+# There are many cases where multiple initial values were recorded
+# either as the initial mean ± standard error or as observations.
+# Hence it is important to divide each observation by the mean of
+# observations at the initial time. Importantly the mean of simulated
+# observations will not exactly match Mean in rnorm(N, Mean, SEM*sqrt(N)).
+# So the ratio needs to be calculated separately for cases where
+# the initial mean is provided and cases where several initial
+# observations were provided. The mean of initial observations
+# also covers cases where there is just a single initial observation.
 meta %<>%
   group_by(Reference, Series) %>%
-  mutate(Proportion = if_else(
-          is.na(SEM),
-          Observation / mean( Observation[ Day == min(Day) ] ),
-          Observation / mean( Mean[ Day == min(Day) ] )
-          )) %>%
-  ungroup() %>%
-  mutate(Group = fct_relevel(Group, "Terrestrial", "Freshwater", "Seagrass"))
+  mutate(
+    Ratio = if_else( 
+      is.na(SEM) & N == 1,
+      Observation / mean( Observation[ Day == min(Day) ] ),
+      Observation / first( Mean[ Day == min(Day) ] )
+    )
+  ) %>%
+  ungroup() %T>%
+  print()
 
-# 1.5 Visually explore data ####
+meta %$% all(is.finite(Ratio))
+
+# 1.6 Organise predictors ####
+# Create a variable that indexes unique experiments
+# across studies, since this will be easier to code
+# the model with.
+meta %<>%
+  group_by(Reference, Series) %>%
+  mutate(Experiment = cur_group_id() %>% 
+           as_factor()) %>%
+  ungroup() %T>%
+  print()
+
+# Relevel some factors
+meta %<>%
+  mutate(
+    Group = Group %>%
+      fct_relevel("Terrestrial", "Freshwater", "Seagrass"),
+    Light = Light %>% fct_relevel("Yes"),
+    Water = Water %>% fct_relevel("Yes"),
+    Response = Response %>% fct_relevel("Photosynthesis")
+  ) %T>%
+  print()
+
+# 1.7 Visually explore data ####
+# Explore range
 meta %>%
-  ggplot(aes(Day, Proportion)) +
+  ggplot(aes(Ratio, 0)) +
+    geom_jitter(alpha = 0.2, shape = 16) +
+    facet_grid(Response ~ Group) +
+    theme_minimal()
+# One clear negative outlier in seaweed photosynthesis.
+
+meta %>%
+  ggplot(aes(Ratio, 0)) +
+    geom_jitter(alpha = 0.2, shape = 16) +
+    facet_grid(Response ~ Group) +
+    coord_cartesian(xlim = c(-1, 3)) +
+    theme_minimal()
+# Some negative values, as expected for net photosynthesis:
+meta %>%
+  filter(Ratio < 0) %>%
+  ggplot(aes(Ratio, 0)) +
+    geom_jitter(alpha = 0.2, shape = 16) +
+    facet_grid(Response ~ Group) +
+    coord_cartesian(xlim = c(-3, 1)) +
+    theme_minimal()
+# For the purposes of this meta-analysis it is more sensible 
+# to treat net photosynthesis as gross photosynthesis because 
+# all other ratios measure this; net gas exchange is just the 
+# odd one out. Hence I am replacing all negative values and 
+# zeros with the minimal observed positive ratio, assumed to be 
+# the minimum observable ratio within measurement error of 0:
+meta %<>%
+  mutate(
+    Ratio = if_else(
+      Ratio <= 0, 
+      min( Ratio[Ratio > 0] ), 
+      Ratio 
+    )
+  ) %T>%
+  print()
+
+meta %$% range(Ratio)
+
+meta %>%
+  ggplot(aes(Ratio, 0)) +
+    geom_jitter(alpha = 0.2, shape = 16) +
+    facet_grid(Response ~ Group) +
+    theme_minimal()
+# Looks better.
+
+# Explore relationship
+meta %>%
+  ggplot(aes(Day, Ratio)) +
     geom_point(alpha = 0.2, shape = 16) +
     facet_grid(Response + Light ~ Group + Water, scales = "free_x") +
-    coord_cartesian(ylim = c(0, 2)) +
     theme_minimal()
-# too many predictors
+# Water availability does not make sense to explore because
+# only studies on terrestrial plants include cases with no water.
 
 meta %>%
-  ggplot(aes(Day, Proportion, colour = Light)) +
-  geom_point(alpha = 0.2, shape = 16) +
-  facet_grid(Response ~ Group, scales = "free_x") +
-  coord_cartesian(ylim = c(0, 2)) +
-  theme_minimal()
-# much clearer
+  ggplot(aes(Day, Ratio, colour = Light)) +
+    geom_point(alpha = 0.2, shape = 16) +
+    facet_grid(Response ~ Group, scales = "free_x") +
+    theme_minimal()
+# Much clearer. I will explore the predictors Light and Response 
+# across groups, species, studies and experiments. 
 
-# Create composite categorical predictor
+# Add effect coding
 meta %<>%
-  mutate(group = fct((str_c(Group, Response, Light, sep = "_"))))
+  mutate( # -0.5/+0.5 effect coding as opposed to 0/1 indicator coding
+    Light_effect = if_else(
+      Light == "Yes", 0.5, -0.5 
+    ),
+    Chl_effect = if_else(
+      Response == "Chlorophyll", 0.5, -0.5
+    )
+  ) %T>%
+  print()
 
-# 2. Prior simulation ####
-# There is no information on k and mu for plants at large. Consideirng that
-# the product of k and mu has to be aorund 5 for the logitsic curve to start
-# near its maximum at t0, ranges for k and mu can be reciprocally estimated.
-# For instance, I'd assume a reasonable range for mu is half a day to 3 years.
-# This would mean the maximum for k has to be around 5 / 0.5 = 10. For simplicity
-# the lower bound can be set to zero in both cases. To allow the posterior to
-# go beyond these estimated bounds, a truncated normal prior is better than
-# a uniform one.
+# 2. Model ####
+# 2.1 Prior simulation ####
+# I am using the same logistic model as in Seagrass.R but simplified
+# because alpha and tau do not need to be estimated:
+# 1 / ( 1 + exp( 5 / mu * ( t - mu ) ) ) 
+# This causal model does not allow increases in photosynthesis after
+# excision because it solely measures decay of photosynthesis, so
+# since observed ratios exceed 1
+meta %$% max(Ratio)
+# these must be accounted for by the likelihood, meaning the likelihood
+# cannot be beta (upper bound at 1). The most straightforward likelihood
+# that fits is gamma because it is strictly positive and has additive
+# variance which I assume for most response variables.
 
-# prior simulation will also need to be done with the joint prior in Stan
-meta_prior_stan <- "
-parameters{
-  real<lower=0> k;
-  real<lower=0> mu;
-}
-
-model{
-  // k ~ uniform( 0 , 10 );
-  // mu ~ uniform( 0 , 1095 );
-  k ~ normal( 5 , 4 ) T[0,];
-  mu ~ normal( 365 , 300 ) T[0,];
-  target += normal_lpdf( log(k) + log(mu) | log(5) , 0.05 );
-}
-"
-require(cmdstanr)
-meta_prior_mod <- cmdstan_model(stan_file = write_stan_file(code = meta_prior_stan))
-meta_prior_samples <- meta_prior_mod$sample(data = list(), # no data to condition on
-                                            seed = 100,
-                                            chains = 8,
-                                            parallel_chains = parallel::detectCores(),
-                                            iter_warmup = 1e4,
-                                            iter_sampling = 1e4)
-
-meta_prior_draws <- meta_prior_samples$draws(format = "df")
-
-meta_prior_draws %>%
-  ggplot() +
-    geom_density(aes(k), fill = "black", alpha = 0.5, bw = 0.01) +
-    scale_x_continuous(limits = c(0, 1), oob = scales::oob_keep) +
-    theme_minimal()
-
-meta_prior_draws %>%
-  ggplot() +
-    geom_density(aes(mu), fill = "black", alpha = 0.5, bw = 1) +
-    scale_x_continuous(limits = c(0, 100), oob = scales::oob_keep) +
-    theme_minimal()
-
-meta_prior_draws %>%
-  slice_sample(n = 1e3) %>% # subsample
-  expand_grid(Day = meta %$% seq(min(Day), max(Day), length.out = 1e4)) %>%
-  mutate(P_mu = 1 / ( 1 + exp( k * ( Day - mu ) ) )) %>%
-  ggplot(aes(x = Day, y = P_mu, group = .draw)) +
+# There is no information on mu for plants at large, but based on the
+# literature review and my kelp and seagrass experiments, 2 weeks
+# seems reasonable. Nonetheless, prior simulation is necessary:
+tibble(n = 1:1e3,
+       alpha_mu = rnorm( 1e3 , log(14) , 0.3 ),
+       alpha_sigma_g = rtnorm( 1e3 , 0 , 0.3 , 0 ),
+       alpha_sigma_s = rtnorm( 1e3 , 0 , 0.3 , 0 ),
+       alpha_sigma_e = rtnorm( 1e3 , 0 , 0.3 , 0 ),
+       beta_mu_l = rnorm( 1e3 , 0 , 0.4 ),
+       beta_mu_c = rnorm( 1e3 , 0 , 0.4 ),
+       beta_sigma_l = rtnorm( 1e3 , 0 , 0.4 , 0 ),
+       beta_sigma_c = rtnorm( 1e3 , 0 , 0.4 , 0 ),
+       mu = exp(
+         rnorm( 1e3 , alpha_mu , alpha_sigma_g ) +
+           rnorm( 1e3 , 0 , alpha_sigma_s ) +
+           rnorm( 1e3 , 0 , alpha_sigma_e ) +
+           rnorm( 1e3 , beta_mu_l , beta_sigma_l ) * 0.5 +
+           rnorm( 1e3 , beta_mu_c , beta_sigma_c ) * 0.5
+       ),
+       sigma = rexp( 1e3 , 1 )) %>%
+  expand_grid(Day = meta %$% seq(min(Day), max(Day), length.out = 100)) %>%
+  mutate(
+    Ratio_mu = 1 / ( 1 + exp( 5 / mu * ( Day - mu ) ) ),
+    Ratio = rlnorm( n() , log(Ratio_mu) , sigma )
+  ) %>%
+  pivot_longer(cols = c(Ratio_mu, Ratio),
+               names_to = "parameter") %>%
+  ggplot(aes(Day, value, group = n)) +
     geom_line(alpha = 0.05) +
-    coord_cartesian(expand = F, clip = "off", 
-                    # xlim = c(0, 5)
-                    ) +
-    theme_minimal()
+    coord_cartesian(expand = F, clip = "off") +
+    facet_wrap(~parameter, scale = "free", nrow = 1) +
+    theme_minimal() +
+    theme(panel.grid = element_blank())
 
-# 3. Stan model ####
-meta_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Meta-analysis", "Stan", "meta.stan")))
+# 2.2 Stan model ####
+require(cmdstanr)
+meta_c_model <- here("Meta-analysis", "Stan", "meta_c.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
+
+meta_nc_model <- here("Meta-analysis", "Stan", "meta_nc.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
 
 require(tidybayes)
-meta_samples <- meta_mod$sample(data = meta %>%
-                                  select(Proportion, Day, group) %>%
-                                  compose_data(),
-                                seed = 100,
-                                chains = 8,
-                                parallel_chains = parallel::detectCores(),
-                                iter_warmup = 1e4,
-                                iter_sampling = 1e4)
+meta_c_samples <- meta_c_model$sample(
+  data = meta %>%
+    select(Day, Ratio, Group,
+           Light_effect, Chl_effect, 
+           Species, Experiment) %>%
+    compose_data(),
+  chains = 8,
+  parallel_chains = parallel::detectCores(),
+  iter_warmup = 1e4,
+  iter_sampling = 1e4
+)
 
-# 4. Model checks ####
-meta_summary <- meta_samples$summary()
-meta_summary %>%
-  filter(rhat > 1.001) # no rhat above 1.001
+meta_nc_samples <- meta_nc_model$sample(
+  data = meta %>%
+    select(Day, Ratio, Group,
+           Light_effect, Chl_effect, 
+           Species, Experiment) %>%
+    compose_data(),
+  chains = 8,
+  parallel_chains = parallel::detectCores(),
+  iter_warmup = 1e4,
+  iter_sampling = 1e4
+)
 
-meta_draws <- meta_samples$draws(format = "df")
+# Save draws
+meta_c_samples$draws() %>%
+  write_rds(here("Meta-analysis", "RDS", "meta_c_samples.rds"))
+meta_c_samples$draws(format = "df") %>%
+  write_rds(here("Meta-analysis", "RDS", "meta_c_samples_df.rds"))
 
+meta_nc_samples$draws() %>%
+  write_rds(here("Meta-analysis", "RDS", "meta_nc_samples.rds"))
+meta_nc_samples$draws(format = "df") %>%
+  write_rds(here("Meta-analysis", "RDS", "meta_nc_samples_df.rds"))
+
+# 2.3 Model checks ####
+# Rhat
+meta_c_samples$summary() %>%
+  summarise(rhat_1.001 = mean( rhat > 1.001 ),
+            rhat_mean = mean(rhat),
+            rhat_sd = sd(rhat))
+# 0.3% of rhat above 1.001. rhat = 1.00 ± 0.000120.
+
+meta_nc_samples$summary() %>%
+  summarise(rhat_1.001 = mean( rhat > 1.001 ),
+            rhat_mean = mean(rhat),
+            rhat_sd = sd(rhat))
+# No rhat above 1.001. rhat = 1.00 ± 0.000117.
+# Models are practically identical, but the non-centred 
+# model is slightly better.
+
+# Chains
 require(bayesplot)
-meta_draws %>% mcmc_rank_overlay() # chains look good
+meta_c_samples$draws(format = "df") %>%
+  mcmc_rank_overlay() %>%
+  ggsave(units = "cm", height = 100, width = 100, 
+         device = cairo_pdf, filename = "meta_c_chains.pdf",
+         path = here("Meta-analysis", "Plots"))
 
-meta_draws %>% mcmc_pairs(pars = c("k[1]", "mu[1]")) # strong correlation, but this is expected
-meta_draws %>% mcmc_pairs(pars = c("k[13]", "mu[13]")) # due to joint prior
+meta_nc_samples$draws(format = "df") %>%
+  mcmc_rank_overlay() %>%
+  ggsave(units = "cm", height = 100, width = 100, 
+         device = cairo_pdf, filename = "meta_nc_chains.pdf",
+         path = here("Meta-analysis", "Plots"))
+# No chains lost, chains look good.
 
-# 5. Prior-posterior comparison ####
-meta_prior_posterior <- meta_samples %>%
-  recover_types(meta %>% select(group)) %>%
-  gather_draws(k[group], mu[group]) %>%
-  ungroup() %>%
-  separate(group, into = c("Group", "Response", "Treatment"), sep = "_") %>%
-  bind_rows(
-    meta_prior_samples %>%
-      gather_draws(k, mu) %>%
-      ungroup() %>%
-      slice(rep( 1:n(), 4 )) %>%
-      mutate(Group = c("Terrestrial", "Freshwater", "Seagrass", "Seaweed") %>%
-               rep(each = 8e4 * 2),
-             Response = "Prior", Treatment = "Prior")
+# Pairs
+meta_c_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "alpha_mu", "alpha_g[1]",
+      "alpha_s[1]", "alpha_e[1]",
+      "beta_mu_l", "beta_l[1]", 
+      "beta_mu_c", "beta_c[1]"
+    )
   ) %>%
-  mutate(Group = case_when(
-                  Group == "Terrestrial" ~ "Terrestrial plants",
-                  Group == "Freshwater" ~ "Freshwater plants",
-                  Group == "Seagrass" ~ "Seagrasses",
-                  Group == "Seaweed" ~ "Seaweeds"
-                 ) %>% fct_relevel("Terrestrial plants", "Freshwater plants", "Seagrasses"),
-         Response = fct_relevel(Response, "Chlorophyll", "Photosynthesis"),
-         Treatment = case_when(
-                      Treatment == "Yes" ~ "Light", 
-                      Treatment == "No" ~ "Dark",
-                      Treatment == "Prior" ~ "Prior"
-                     ) %>% fct_relevel("Prior", "Light")
-         )
+  ggsave(units = "cm", height = 50, width = 50, 
+         device = cairo_pdf, filename = "meta_c_pairs.pdf",
+         path = here("Meta-analysis", "Plots"))
+
+meta_nc_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "alpha_mu", "alpha_g[1]",
+      "alpha_s[1]", "alpha_e[1]",
+      "beta_mu_l", "beta_l[1]", 
+      "beta_mu_c", "beta_c[1]"
+    )
+  ) %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         device = cairo_pdf, filename = "meta_nc_pairs.pdf",
+         path = here("Meta-analysis", "Plots"))
+# No correlations. All looks well.
+
+# 2.4 Prior-posterior comparison ####
+# Sample prior
+source("functions.R")
+meta_prior <- prior_samples(
+  model = meta_nc_model, # priors only work well non-centred
+  data = meta %>%
+    select(Day, Ratio, Group,
+           Light_effect, Chl_effect, 
+           Species, Experiment) %>%
+    compose_data()
+  )
+
+# Groups
+meta_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = meta_c_samples,
+    group = meta %>% select(Group),
+    parameters = c("alpha_mu", "alpha_sigma_g", "alpha_g[Group]",
+                   "alpha_sigma_s", "alpha_sigma_e", "sigma",
+                   "beta_mu_l", "beta_sigma_l", "beta_l[Group]",
+                   "beta_mu_c", "beta_sigma_c", "beta_c[Group]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(
+    group_name = "Group"
+  ) %>%
+  ggsave(units = "cm", height = 20, width = 30, 
+         device = cairo_pdf, filename = "meta_c_prior_posterior_group.pdf",
+         path = here("Meta-analysis", "Plots"))
+
+meta_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = meta_nc_samples,
+    group = meta %>% select(Group),
+    parameters = c("alpha_mu", "alpha_sigma_g", "alpha_g[Group]",
+                   "alpha_sigma_s", "alpha_sigma_e", "sigma",
+                   "beta_mu_l", "beta_sigma_l", "beta_l[Group]",
+                   "beta_mu_c", "beta_sigma_c", "beta_c[Group]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(
+    group_name = "Group"
+  ) %>%
+  ggsave(units = "cm", height = 20, width = 30, 
+         device = cairo_pdf, filename = "meta_nc_prior_posterior_group.pdf",
+         path = here("Meta-analysis", "Plots"))
+
+# Species
+meta_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = meta_c_samples,
+    group = meta %>% select(Species),
+    parameters = c("alpha_s[Species]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(
+    group_name = "Species",
+  ) %>%
+  ggsave(units = "cm", height = 40, width = 60, 
+         device = cairo_pdf, filename = "meta_c_prior_posterior_species.pdf",
+         path = here("Meta-analysis", "Plots"))
+
+meta_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = meta_nc_samples,
+    group = meta %>% select(Species),
+    parameters = c("alpha_s[Species]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(
+    group_name = "Species",
+  ) %>%
+  ggsave(units = "cm", height = 40, width = 60, 
+         device = cairo_pdf, filename = "meta_nc_prior_posterior_species.pdf",
+         path = here("Meta-analysis", "Plots"))
+
+# Experiments
+meta_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = meta_c_samples,
+    group = meta %>% select(Experiment),
+    parameters = c("alpha_e[Experiment]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(
+    group_name = "Experiment",
+  ) %>%
+  ggsave(units = "cm", height = 80, width = 120, 
+         device = cairo_pdf, filename = "meta_c_prior_posterior_experiment.pdf",
+         path = here("Meta-analysis", "Plots"))
+
+meta_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = meta_nc_samples,
+    group = meta %>% select(Experiment),
+    parameters = c("alpha_e[Experiment]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(
+    group_name = "Experiment",
+  ) %>%
+  ggsave(units = "cm", height = 80, width = 120, 
+         device = cairo_pdf, filename = "meta_nc_prior_posterior_experiment.pdf",
+         path = here("Meta-analysis", "Plots"))
+# Both models are practically identical.
+# Choose non-centred model because of marginally 
+# better performance.
+
+# 2.5 Parameters ####
+
+# 2.6 Continuous prediction ####
+
+# 3. Half-life ####
+# 3.1 Data ####
+# 3.1.1 Load data ####
+
+# 3.1.2 Check redundancy ####
+
+# 3.2 Model ####
+# 3.2.1 Prior simulation ####
+
+# 3.2.2 Stan model ####
+
+# 3.2.3 Model checks ####
+
+# 3.2.4 Prior-posterior comparison ####
+
+# 3.2.5 Parameters ####
+
+
+# 4. Figures ####
+# 4.1 Figure 2 ####
+
+# 4.2 Figure 3 ####
+
+# 5. Tables ####
 
 mytheme <- theme(panel.background = element_blank(),
                  panel.grid.major = element_blank(),
