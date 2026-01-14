@@ -62,9 +62,7 @@ prior_posterior_draws <- function(prior_samples, posterior_samples,
         mutate(distribution = "prior" %>% factor()) %>%
         bind_rows(
           posterior_samples %>%
-            tidybayes::recover_types(group) %>%
             tidybayes::gather_draws(!!!parameters_list) %>%
-            ungroup() %>%
             mutate(distribution = "posterior" %>% factor())
         )
     } else if(format %in% c("short", "shorter", "spread") &
@@ -75,9 +73,7 @@ prior_posterior_draws <- function(prior_samples, posterior_samples,
         mutate(distribution = "prior" %>% factor()) %>%
         bind_rows(
           posterior_samples %>%
-            tidybayes::recover_types(group) %>%
             tidybayes::spread_draws(!!!parameters_list) %>%
-            ungroup() %>%
             mutate(distribution = "posterior" %>% factor())
         )
     } else {
@@ -88,7 +84,9 @@ prior_posterior_draws <- function(prior_samples, posterior_samples,
 }
 
 prior_posterior_plot <- function(prior_posterior_draws_long, 
-                                 group_name = NULL, ridges = TRUE) {
+                                 group_name = NULL, 
+                                 second_group_name = NULL,
+                                 ridges = FALSE) {
   
   if(is.null(group_name)) {
     prior_posterior_plot <- 
@@ -99,7 +97,7 @@ prior_posterior_plot <- function(prior_posterior_draws_long,
                 facet_wrap(~ .variable, scales = "free") +
                 theme_minimal() +
                 theme(panel.grid = element_blank())
-  } else if(!is.null(group_name) & ridges == TRUE) {
+  } else if(!is.null(group_name) & is.null(second_group_name) & ridges == TRUE) {
     group_name_parsed <- group_name %>% rlang::parse_expr()
     prior_posterior_plot <- 
       ggplot2::ggplot(data = prior_posterior_draws_long,
@@ -109,7 +107,7 @@ prior_posterior_plot <- function(prior_posterior_draws_long,
                 facet_wrap(~ .variable, scales = "free") +
                 theme_minimal() +
                 theme(panel.grid = element_blank())
-  } else if(!is.null(group_name) & ridges == FALSE) {
+  } else if(!is.null(group_name) & is.null(second_group_name) & ridges == FALSE) {
     group_name_parsed <- group_name %>% rlang::parse_expr()
     prior_posterior_plot <- 
       ggplot2::ggplot(data = prior_posterior_draws_long,
@@ -120,6 +118,32 @@ prior_posterior_plot <- function(prior_posterior_draws_long,
                                          scales = "free", nest_line = TRUE) +
                 theme_minimal() +
                 theme(panel.grid = element_blank())
+  } else if(!is.null(group_name) & !is.null(second_group_name) & ridges == TRUE) {
+    group_name_parsed <- group_name %>% rlang::parse_expr()
+    second_group_name_parsed <- second_group_name %>% rlang::parse_expr()
+    prior_posterior_plot <- 
+      ggplot2::ggplot(data = prior_posterior_draws_long,
+                      aes(x = .value, 
+                          y = interaction(!!group_name_parsed, !!second_group_name_parsed),
+                          alpha = distribution)) +
+      ggdist::stat_slab(height = 2, fill = "black") +
+      scale_alpha_manual(values = c(0.2, 0.6)) +
+      facet_wrap(~ .variable, scales = "free") +
+      theme_minimal() +
+      theme(panel.grid = element_blank())
+  } else if(!is.null(group_name) & !is.null(second_group_name) & ridges == FALSE) {
+    group_name_parsed <- group_name %>% rlang::parse_expr()
+    second_group_name_parsed <- second_group_name %>% rlang::parse_expr()
+    prior_posterior_plot <- 
+      ggplot2::ggplot(data = prior_posterior_draws_long,
+                      aes(x = .value, alpha = distribution)) +
+      geom_density(colour = NA, fill = "black") +
+      scale_alpha_manual(values = c(0.2, 0.6)) +
+      ggh4x::facet_nested_wrap(facets = vars(.variable, !!group_name_parsed,
+                                             !!second_group_name_parsed), 
+                               scales = "free", nest_line = TRUE) +
+      theme_minimal() +
+      theme(panel.grid = element_blank())
   } else {
     prior_posterior_plot <- "Not a valid data format or group."
   }
@@ -127,19 +151,21 @@ prior_posterior_plot <- function(prior_posterior_draws_long,
   return(prior_posterior_plot)
 }
 
-spread_continuous <- function(prior_posterior_draws_short, data, predictor_name, 
-                              group_name = NULL, length = 100) {
+spread_continuous <- function(prior_posterior_draws_short, 
+                              data, predictor_name, 
+                              group_name = NULL, second_group_name = NULL, 
+                              length = 100) {
   
   predictor_name_parsed <- predictor_name %>% rlang::parse_expr()
   
-  if(is.null(group_name)) {
+  if(is.null(group_name) & is.null(second_group_name)) {
     require(magrittr)
     spread_continuous <- prior_posterior_draws_short %>%
       expand_grid(!!predictor_name := data %$% 
                   seq(min(!!predictor_name_parsed),
                       max(!!predictor_name_parsed),
                       length.out = length))
-  } else if(!is.null(group_name)) {
+  } else if(!is.null(group_name) & is.null(second_group_name)) {
     group_name_parsed <- group_name %>% rlang::parse_expr()
     spread_continuous <- prior_posterior_draws_short %>%
       left_join(data %>%
@@ -147,6 +173,26 @@ spread_continuous <- function(prior_posterior_draws_short, data, predictor_name,
                   summarise(min = min(!!predictor_name_parsed),
                             max = max(!!predictor_name_parsed)),
                 by = group_name) %>%
+      mutate(min = if_else(is.na(min), # account for groups not contained in data, e.g. prior
+                           data %$% min(!!predictor_name_parsed),
+                           min),
+             max = if_else(is.na(max),
+                           data %$% max(!!predictor_name_parsed),
+                           max)) %>%
+      rowwise() %>%
+      mutate(!!predictor_name := list( seq(min, max, length.out = length) )) %>%
+      select(-c(min, max)) %>%
+      unnest(!!predictor_name_parsed)
+  } else if(!is.null(group_name) & !is.null(second_group_name)){
+    group_name_parsed <- group_name %>% rlang::parse_expr()
+    second_group_name_parsed <- second_group_name %>% rlang::parse_expr()
+    spread_continuous <- prior_posterior_draws_short %>%
+      left_join(data %>%
+                  group_by(!!group_name_parsed,
+                           !!second_group_name_parsed) %>%
+                  summarise(min = min(!!predictor_name_parsed),
+                            max = max(!!predictor_name_parsed)),
+                by = c(group_name, second_group_name)) %>%
       mutate(min = if_else(is.na(min), # account for groups not contained in data, e.g. prior
                            data %$% min(!!predictor_name_parsed),
                            min),
