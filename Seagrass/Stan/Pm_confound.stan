@@ -2,6 +2,8 @@ data{
   int n;
   vector[n] Pm_mean;
   vector[n] Pm_sd;
+  array[n] int Species;
+  int n_Species;
   vector[n] O2_mean_std;
   vector[n] O2_sd_std;
   vector[n] T_mean_std;
@@ -12,51 +14,49 @@ data{
 }
 
 parameters{
-  // True estimates for measurement error
+  // Unobserved/true/latent variables
   vector[n] Pm;
   vector[n] O2;
   vector[n] T;
 
   // Intercept parameter
-  real<lower=0> alpha;
+  vector[n_Species] alpha;
 
   // Slope parameters
-  real beta_O2;
-  real beta_T;
-  real beta_P;
-  real beta_S;
-  real beta_M;
+  vector[n_Species] beta_O2;
+  vector[n_Species] beta_T;
+  vector[n_Species] beta_P;
+  vector[n_Species] beta_S;
+  vector[n_Species] beta_M;
 
-  // Likelihood uncertainty parameter
-  real<lower=0> Pm_sigma;
+  // Likelihood standard deviation
+  vector<lower=0>[n_Species] Pm_sigma;
 }
 
 model{
   // Predictor measurement error
-  O2 ~ normal( 0 , 1 );
+  O2 ~ normal( 0 , 1 ); // All confounders are standardised, hence the standard normal
   O2_mean_std ~ normal( O2 , O2_sd_std );
   T ~ normal( 0 , 1 );
   T_mean_std ~ normal( T , T_sd_std );
 
   // Intercept and slope priors
-  alpha ~ gamma( 20^2 / 10^2 , 20 / 10^2 );
-  beta_O2 ~ normal( 0 , 1 );
+  alpha ~ normal( 21 , 10 );
+  beta_O2 ~ normal( 0 , 1 ); // these slopes are the change per standard deviation
   beta_T ~ normal( 0 , 1 );
   beta_P ~ normal( 0 , 1 );
   beta_S ~ normal( 0 , 1 );
   beta_M ~ normal( 0 , 1 );
 
-  // Likelihood uncertainty prior
+  // Likelihood standard deviation prior
   Pm_sigma ~ exponential( 1 );
 
   // Model
-  vector[n] Pm_mu;
-  for ( i in 1:n ) {
-    Pm_mu[i] = alpha + beta_O2 * O2[i] + beta_T * T[i] +
-    beta_P * P_mean_std[i] + beta_S * S_std[i] + beta_M * M_std[i];
-  }
+  vector[n] Pm_mu = alpha[Species] + beta_O2[Species] .* O2 + 
+  beta_T[Species] .* T + beta_P[Species] .* P_mean_std + 
+  beta_S[Species] .* S_std + beta_M[Species] .* M_std;
 
-  // Likelihood incorporating measurement error
-  Pm ~ normal( Pm_mu , Pm_sigma );
+  // Normal likelihood with normal measurement error
+  Pm ~ normal( Pm_mu , Pm_sigma[Species] );
   Pm_mean ~ normal( Pm , Pm_sd );
 }
