@@ -1,3 +1,6 @@
+#### Plant limbo: seagrass detrital photosynthesis ####
+#### Luka Seamus Wright                            ####
+
 # 1. Oxygen ####
 # 1.1 Load data ####
 require(here)
@@ -20,7 +23,10 @@ O2_list <- O2 %>%
         compose_data())
 
 require(cmdstanr)
-O2_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "O2.stan")))
+O2_mod <- here("Seagrass", "Stan", "O2.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
 
 O2_samples <- O2_list %>%
   map(~ O2_mod$sample(data = .,
@@ -151,7 +157,10 @@ V <- here("Seagrass", "Volume.csv") %>% read.csv() %>%
   mutate(Vs = (Volume - mean(Volume)) / sd(Volume)) # standardise Volume
 
 # 2.2 Stan model #### 
-V_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "V.stan")))
+V_mod <- here("Seagrass", "Stan", "V.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
 
 V_samples <- V_mod$sample(data = compose_data(V),
                           seed = 100,
@@ -224,7 +233,10 @@ T_list <- O2 %>%
         compose_data())
 
 # 4.2 Stan model ####
-T_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "T.stan")))
+T_mod <- here("Seagrass", "Stan", "T.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
 
 T_samples <- T_list %>%
   map(~ T_mod$sample(data = .,
@@ -375,7 +387,10 @@ M_prior %>%
 # prior simulation looks good
 
 # 6.4 Stan model ####
-M_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "M.stan")))
+M_mod <- here("Seagrass", "Stan", "M.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
 
 M_samples <- M_mod$sample(data = M %>%
                             select(Mass, Day_c, Species) %>%
@@ -440,7 +455,9 @@ P %<>%
 P %<>%
   group_by(Species) %>%
   mutate(Day = min(Date) %--% Date %>%
-           time_length("day"))
+           time_length("day")) %>%
+  ungroup() %T>%
+  print()
 
 # 7.3 Summarise response and predictors ####
 # summarise P for modelling purposes
@@ -459,7 +476,8 @@ P_summary <- P %>%
             M = mean(Mass),
             n = length(.draw)) %>%
   ungroup() %>%
-  mutate(Species = fct_relevel(Species, "Halophila ovalis"))
+  mutate(Species = fct_relevel(Species, "Halophila ovalis")) %T>%
+  print()
 
 # 7.4 Check duplicates ####
 P_summary %>%
@@ -529,10 +547,12 @@ M %>% write_rds(file = here("Seagrass", "RDS", "M.rds"))
 P %>% write_rds(file = here("Seagrass", "RDS", "P.rds"))
 P_summary %>% write_rds(file = here("Seagrass", "RDS", "P_summary.rds"))
 
-# 7.6 Confounders ####
-# 7.6.1 Prepare data ####
-# Confounders
-# create standardised explanatory variables
+# 7.6 Mass-based photosynthesis ####
+# 7.6.1 Standardise confounders ####
+# Confounders are best standardised (z-scores) because they have
+# varying scales that are hard to anticipate in the prior. This
+# also helps when predicting because setting them to zero is
+# equivalent to holding them at their mean.
 P_summary %<>%
   mutate(O2_mean_std = ( O2_mean - mean(O2_mean) ) / sd(O2_mean),
          O2_sd_std = O2_sd / sd(O2_mean),
@@ -540,131 +560,842 @@ P_summary %<>%
          T_sd_std = T_sd / sd(T_mean),
          P_mean_std = ( P_mean - mean(P_mean) ) / sd(P_mean),
          S_std = ( S - mean(S) ) / sd(S),
-         M_std = ( M - mean(M) ) / sd(M))
+         M_std = ( M - mean(M) ) / sd(M)) %T>%
+  print()
 
 # 7.6.2 Prior simulation ####
-Prior <- here("Seagrass", "Prior", "Prior.csv") %>% read.csv()
+# Load data from literature
+Prior <- here("Seagrass", "Prior", "Prior.csv") %>% 
+  read.csv() %T>%
+  print()
 
-# calculate as species-specific means and sds
-Prior %>%
+# Calculate leaf-based flux
+Prior %<>%
   left_join(M %>% select(Species, Mass) %>%
               mutate(Leafmass = if_else(Species == "Halophila ovalis",
-                                        Mass / 10, Mass)) %>%
+                                        Mass / 10, Mass)) %>% # There were 10 leaves for H. ovalis
               group_by(Species) %>%
               summarise(Leafmass = mean(Leafmass)),
             by = "Species", relationship = "many-to-one") %>%
-  mutate(Fl = Flux * Leafmass) %>%
+  mutate(Flux_leaf = Flux * Leafmass) %T>%
+  print()
+
+# Calculate species-specific summary stats
+Prior %>%
   group_by(Species, Variable) %>%
   summarise(Fm_mean = mean(Flux),
             Fm_sd = sd(Flux),
             Fm_median = median(Flux),
-            Fl_mean = mean(Fl),
-            Fl_sd = sd(Fl),
-            Fl_median = median(Fl),
-            n = length(Flux))
+            Fl_mean = mean(Flux_leaf),
+            Fl_sd = sd(Flux_leaf),
+            Fl_median = median(Flux_leaf),
+            n = n())
 
-# calculate overall mean and sd 
+# Calculate overall summary stats
 Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  left_join(M %>% select(Species, Mass) %>%
-              mutate(Leafmass = if_else(Species == "Halophila ovalis",
-                                        Mass / 10, Mass)) %>%
-              group_by(Species) %>%
-              summarise(Leafmass = mean(Leafmass)),
-            by = "Species", relationship = "many-to-one") %>%
-  mutate(Fl = Flux * Leafmass) %>%
+  group_by(Variable) %>%
   summarise(Pm_mean = mean(Flux),
             Pm_sd = sd(Flux),
             Pm_median = median(Flux),
-            Pl_mean = mean(Fl),
-            Pl_sd = sd(Fl),
-            Pl_median = median(Fl),
-            n = length(Flux))
+            Pl_mean = mean(Flux_leaf),
+            Pl_sd = sd(Flux_leaf),
+            Pl_median = median(Flux_leaf),
+            n = n())
+# As expected, based on the mean-median comparison,
+# photosynthesis and respiration are right-skewed.
+# Better proceed with the median.
 
-
-# based on the mean-median comparison photosynthesis and 
-# detrital respiration are right-skewed
-
-# prior simulation for mass-based estimates
-Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 35.2173, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 35.2173^2 / 10^2, rate = 35.2173 / 10^2)), aes(x)) + # arbitrary sd
-    theme_minimal()
-# shift mean to capture the most probable peak
-Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 35.2173, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 20^2 / 10^2, rate = 20 / 10^2)), aes(x)) +
-    theme_minimal()
-# looks better and 20 is closer to median (20.67893)
-
-
-# prior for mass-based confounder model
-Pm_prior <- 
-  tibble(n = 1:1e3,
-         alpha = rgamma(n = 1e3, shape = 20^2 / 10^2, rate = 20 / 10^2), # Pm at mean of predictor is positive
-         beta = rnorm(n = 1e3, mean = 0, sd = 1)) %>% 
-  expand_grid(Predictor = seq(-3, 3, length.out = 50)) %>%
-  mutate(P_mu = alpha + beta * Predictor)
-
-Pm_prior %>%
-  ggplot(aes(x = Predictor, y = P_mu, group = n)) +
-  geom_hline(yintercept = P_summary %$% c(min(Pm_mean), 0, max(Pm_mean))) +
-  geom_line(alpha = 0.05) +
-  coord_cartesian(expand = F, clip = "off") +
-  theme_minimal()
-# covers all probable scenarios
+# Simulate
+tibble(n = 1:1e3, 
+       # I am exponentiating here because that's how I'm including confounders
+       alpha = exp( rnorm( 1e3 , log(21) , 0.4 ) ), # based on prior median of 20.7
+       # Two weeks seems reasonable based on E. radiata (doi: 10.1093/aob/mcad167)
+       mu = exp( rnorm( 1e3 , log(14) , 0.6 ) ), # more uncertainty around mu
+       tau = exp( rnorm( 1e3 , log(2) , 0.4 ) ), # based on prior median of 1.93
+       Pm_sigma = rexp( 1e3 , 1 )) %>%
+  expand_grid(Day = P_summary %$% seq(min(Day), max(Day), length.out = 100)) %>%
+  mutate(
+    Pm_mu = (alpha + tau) / ( 1 + exp( 5 / mu * ( Day - mu ) ) ) - tau,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  pivot_longer(cols = c(Pm_mu, Pm),
+               names_to = "parameter") %>%
+  ggplot(aes(Day, value, group = n)) +
+    geom_line(alpha = 0.05) +
+    geom_hline(yintercept = P_summary %$% range(Pm_mean)) +
+    coord_cartesian(expand = F, clip = "off") +
+    facet_wrap(~parameter, scale = "free", nrow = 1) +
+    theme_minimal() +
+    theme(panel.grid = element_blank())
+# Looks very reasonable!
 
 # 7.6.3 Stan model ####
-Pm_confound_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "Pm_confound.stan")))
+Pm_mod <- here("Seagrass", "Stan", "Pm.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
 
-Pm_confound_samples <- Pm_confound_mod$sample(data = P_summary %>%
-                                                select(Pm_mean, Pm_sd, O2_mean_std, O2_sd_std,
-                                                       T_mean_std, T_sd_std, P_mean_std, S_std, M_std) %>%
-                                                compose_data(),
-                                              seed = 100,
-                                              chains = 8,
-                                              parallel_chains = parallel::detectCores(),
-                                              iter_warmup = 1e4,
-                                              iter_sampling = 1e4)
+Pm_samples <- Pm_mod$sample(
+  data = P_summary %>%
+    select(Day, Pm_mean, Pm_sd, Species,
+           O2_mean_std, O2_sd_std, T_mean_std, T_sd_std,
+           P_mean_std, S_std, M_std) %>%
+    compose_data(),
+  chains = 8,
+  parallel_chains = parallel::detectCores(),
+  iter_warmup = 1e4,
+  iter_sampling = 1e4
+)
+
+# Save draws
+Pm_samples$draws() %>%
+  write_rds(here("Seagrass", "RDS", "Pm_samples.rds"))
+Pm_samples$draws(format = "df") %>%
+  write_rds(here("Seagrass", "RDS", "Pm_samples_df.rds"))
 
 # 7.6.4 Model checks ####
-Pm_confound_summary <- Pm_confound_samples$summary()
-Pm_confound_summary %>%
-  filter(rhat > 1.001)
+# R-hat
+Pm_samples$summary() %>%
+  summarise(rhat_1.001 = mean( rhat > 1.001 ),
+            rhat_mean = mean(rhat),
+            rhat_sd = sd(rhat))
+# No rhat above 1.001. rhat = 1.00 ± 0.0000994.
 
-Pm_confound_draws <- Pm_confound_samples$draws(format = "df")
+# Chains
+Pm_samples$draws(format = "df") %>%
+  mcmc_rank_overlay() %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         device = cairo_pdf, filename = "Pm_chains.pdf",
+         path = here("Seagrass", "Plots"))
+# Looks good
 
-Pm_confound_draws %>% mcmc_rank_overlay() # chains look good
+# Pairs
+Pm_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "log_alpha_mu[1]", "log_alpha_mu[2]",
+      "log_mu_mu[1]", "log_mu_mu[2]",
+      "log_tau_mu[1]", "log_tau_mu[2]",
+      "Pm_sigma[1]", "Pm_sigma[2]"
+    )
+  ) %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         filename = "Pm_pairs.png",
+         path = here("Seagrass", "Plots"))
 
-Pm_confound_draws %>% mcmc_pairs(pars = c("alpha", "beta_O2"))
-Pm_confound_draws %>% mcmc_pairs(pars = c("alpha", "beta_T"))
-Pm_confound_draws %>% mcmc_pairs(pars = c("alpha", "beta_P"))
-Pm_confound_draws %>% mcmc_pairs(pars = c("alpha", "beta_S"))
-Pm_confound_draws %>% mcmc_pairs(pars = c("alpha", "beta_M"))
+Pm_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "log_alpha_mu[1]", "log_alpha_O2[1]",
+      "log_alpha_T[1]", "log_alpha_M[1]",
+      "log_mu_mu[1]", "log_mu_O2[1]",
+      "log_mu_T[1]", "log_mu_M[1]",
+      "log_tau_mu[1]", "log_tau_O2[1]",
+      "log_tau_T[1]", "log_tau_M[1]"
+    )
+  ) %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         filename = "Pm_pairs_confound.png",
+         path = here("Seagrass", "Plots"))
+# No correlations. All looks well.
 
 # 7.6.5 Prior-posterior comparison ####
-Pm_confound_posterior <- Pm_confound_samples %>%
-  gather_draws(alpha, beta_O2, beta_T, beta_P, beta_S, beta_M) %>%
-  ungroup() %>%
-  mutate(Distribution = "Posterior")
+# Sample prior
+source("functions.R")
+Pm_prior <- prior_samples(
+  model = Pm_mod,
+  data = P_summary %>%
+    select(Day, Pm_mean, Pm_sd, Species,
+           O2_mean_std, O2_sd_std, T_mean_std, T_sd_std,
+           P_mean_std, S_std, M_std) %>%
+    compose_data()
+  )
 
-Pm_confound_prior <- tibble(.chain = 1:8 %>% rep(each = 1e4),
-                            .iteration = 1:1e4 %>% rep(8),
-                            .draw = 1:8e4,
-                            alpha = rgamma(8e4, 20^2 / 10^2 , 20 / 10^2),
-                            beta_O2 = rnorm(8e4, 0 , 1),
-                            beta_T = rnorm(8e4, 0 , 1),
-                            beta_P = rnorm(8e4, 0 , 1),
-                            beta_S = rnorm(8e4, 0 , 1),
-                            beta_M = rnorm(8e4, 0 , 1),
-                            Distribution = "Prior") %>%
-  pivot_longer(cols = starts_with(c("alpha", "beta")), values_to = ".value", names_to = ".variable")
+Pm_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = Pm_samples,
+    group = P_summary %>% select(Species),
+    parameters = c("log_alpha_mu[Species]", "log_alpha_O2[Species]",
+                   "log_alpha_T[Species]", "log_alpha_P[Species]",
+                   "log_alpha_S[Species]", "log_alpha_M[Species]",
+                   "log_mu_mu[Species]", "log_mu_O2[Species]",
+                   "log_mu_T[Species]", "log_mu_P[Species]",
+                   "log_mu_S[Species]", "log_mu_M[Species]",
+                   "log_tau_mu[Species]", "log_tau_O2[Species]",
+                   "log_tau_T[Species]", "log_tau_P[Species]",
+                   "log_tau_S[Species]", "log_tau_M[Species]",
+                   "Pm_sigma[Species]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(group_name = "Species") %>%
+  ggsave(units = "cm", height = 30, width = 50, 
+         device = cairo_pdf, filename = "Pm_prior_posterior.pdf",
+         path = here("Seagrass", "Plots"))
+
+# 7.6.6 Parameters ####
+Pm_prior_posterior <- Pm_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = Pm_samples,
+    group = P_summary %>% select(Species),
+    parameters = c("log_alpha_mu[Species]", "log_alpha_O2[Species]",
+                   "log_alpha_T[Species]", "log_alpha_P[Species]",
+                   "log_alpha_S[Species]", "log_alpha_M[Species]",
+                   "log_mu_mu[Species]", "log_mu_O2[Species]",
+                   "log_mu_T[Species]", "log_mu_P[Species]",
+                   "log_mu_S[Species]", "log_mu_M[Species]",
+                   "log_tau_mu[Species]", "log_tau_O2[Species]",
+                   "log_tau_T[Species]", "log_tau_P[Species]",
+                   "log_tau_S[Species]", "log_tau_M[Species]",
+                   "Pm_sigma[Species]"),
+    format = "short"
+  ) %>%
+  filter(Species == "Halophila ovalis" & distribution == "prior" |
+           distribution == "posterior") %>% # Remove redundant priors
+  mutate( # Embed prior in Species
+    Species = if_else(
+      distribution == "prior", "Prior", Species
+    ) %>% fct()
+  ) %>%
+  select(-distribution) %T>%
+  print()
+
+Pm_prior_posterior %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pm_prior_posterior.rds"))
+
+Pm_contrast <- Pm_prior_posterior %>%
+  filter(Species != "Prior") %>%
+  mutate( # Parameters conditional on confounders held at their means (zero)
+    alpha = exp(log_alpha_mu),
+    mu = exp(log_mu_mu),
+    tau = exp(log_tau_mu),
+  ) %>%
+  select(starts_with("."), Species, 
+         alpha, mu, tau) %>%
+  pivot_longer(cols = c(alpha, mu, tau),
+               names_to = "Parameter") %>%
+  pivot_wider(names_from = Species) %>%
+  mutate(
+    # Calculate contrast as difference and ratio
+    diff = `Halophila ovalis` - `Amphibolis antarctica`,
+    ratio = `Halophila ovalis` / `Amphibolis antarctica`,
+  ) %T>%
+  print()
+
+# 7.6.7 Prediction ####
+Pm_prediction <- Pm_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "Day") %>%
+  mutate( # Predictions conditional on confounders held at their means (zero)
+    alpha = exp(log_alpha_mu),
+    mu = exp(log_mu_mu),
+    tau = exp(log_tau_mu),
+    Pm_mu = (alpha + tau) / ( 1 + exp( 5 / mu * ( Day - mu ) ) ) - tau,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>% # Summarise predictions
+  group_by(Day, Species) %>%
+  median_qi(Pm_mu, Pm, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_prediction %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pm_prediction.rds"))
+
+# 7.6.8 Confounder prediction ####
+Pm_prediction_O2 <- Pm_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "O2_mean_std") %>%
+  mutate( # The other confounders are held at their mean by exclusion
+    log_alpha = log_alpha_mu + log_alpha_O2 * O2_mean_std,
+    log_mu = log_mu_mu + log_mu_O2 * O2_mean_std,
+    log_tau = log_tau_mu + log_tau_O2 * O2_mean_std
+  ) %>%
+  group_by(O2_mean_std, Species) %>%
+  median_qi(log_alpha, log_mu, log_tau, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_prediction_T <- Pm_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "T_mean_std") %>%
+  mutate(
+    log_alpha = log_alpha_mu + log_alpha_T * T_mean_std,
+    log_mu = log_mu_mu + log_mu_T * T_mean_std,
+    log_tau = log_tau_mu + log_tau_T * T_mean_std
+  ) %>%
+  group_by(T_mean_std, Species) %>%
+  median_qi(log_alpha, log_mu, log_tau, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_prediction_P <- Pm_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "P_mean_std") %>%
+  mutate(
+    log_alpha = log_alpha_mu + log_alpha_P * P_mean_std,
+    log_mu = log_mu_mu + log_mu_P * P_mean_std,
+    log_tau = log_tau_mu + log_tau_P * P_mean_std
+  ) %>%
+  group_by(P_mean_std, Species) %>%
+  median_qi(log_alpha, log_mu, log_tau, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_prediction_S <- Pm_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "S_std") %>%
+  mutate(
+    log_alpha = log_alpha_mu + log_alpha_S * S_std,
+    log_mu = log_mu_mu + log_mu_S * S_std,
+    log_tau = log_tau_mu + log_tau_S * S_std
+  ) %>%
+  group_by(S_std, Species) %>%
+  median_qi(log_alpha, log_mu, log_tau, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_prediction_M <- Pm_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "M_std") %>%
+  mutate(
+    log_alpha = log_alpha_mu + log_alpha_M * M_std,
+    log_mu = log_mu_mu + log_mu_M * M_std,
+    log_tau = log_tau_mu + log_tau_M * M_std
+  ) %>%
+  group_by(M_std, Species) %>%
+  median_qi(log_alpha, log_mu, log_tau, .width = c(.5, .8, .9)) %T>%
+  print()
+
+# Combine confounder predictions
+Pm_prediction_confound <- bind_rows(
+  Pm_prediction_O2 %>%
+    mutate(Confounder = "O2" %>% fct()) %>%
+    rename(Predictor = O2_mean_std),
+  Pm_prediction_T %>%
+    mutate(Confounder = "T" %>% fct()) %>%
+    rename(Predictor = T_mean_std),
+  Pm_prediction_P %>%
+    mutate(Confounder = "P" %>% fct()) %>%
+    rename(Predictor = P_mean_std),
+  Pm_prediction_S %>%
+    mutate(Confounder = "S" %>% fct()) %>%
+    rename(Predictor = S_std),
+  Pm_prediction_M %>%
+    mutate(Confounder = "M" %>% fct()) %>%
+    rename(Predictor = M_std)
+) %T>%
+  print()
+
+# Clean up
+rm(Pm_prediction_O2, Pm_prediction_T, Pm_prediction_P,
+   Pm_prediction_S, Pm_prediction_M)
+
+# Reverse standardisation
+Pm_prediction_confound %<>%
+  mutate(
+    Predictor = P_summary %$% case_when(
+      Confounder == "O2" ~ Predictor * sd(O2_mean) + mean(O2_mean),
+      Confounder == "T" ~ Predictor * sd(T_mean) + mean(T_mean),
+      Confounder == "P" ~ Predictor * sd(P_mean) + mean(P_mean),
+      Confounder == "S" ~ Predictor * sd(S) + mean(S),
+      Confounder == "M" ~ Predictor * sd(M) + mean(M)
+    )
+  ) %T>%
+  print()
+
+Pm_prediction_confound %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pm_prediction_confound.rds"))
+
+# 7.7 Leaf-based photosynthesis ####
+# 7.7.1 Prior simulation ####
+tibble(n = 1:1e3, 
+       # I am picking a value from the prior medians 1 and 7 (see above) 
+       # for alpha and increasing uncertainty because I know that leaves 
+       # vary dramatically in size.
+       alpha = exp( rnorm( 1e3 , log(7) , 1 ) ), # the upper end is more sensible
+       mu = exp( rnorm( 1e3 , log(14) , 0.6 ) ), # same as before
+       tau = exp( rnorm( 1e3 , log(1) , 0.4 ) ), # no prior data, but likely smaller
+       Pl_sigma = rexp( 1e3 , 1 )) %>%
+  expand_grid(Day = P_summary %$% seq(min(Day), max(Day), length.out = 100)) %>%
+  mutate(
+    Pl_mu = (alpha + tau) / ( 1 + exp( 5 / mu * ( Day - mu ) ) ) - tau,
+    Pl = rnorm( n() , Pl_mu , Pl_sigma )
+  ) %>%
+  pivot_longer(cols = c(Pl_mu, Pl),
+               names_to = "parameter") %>%
+  ggplot(aes(Day, value, group = n)) +
+    geom_line(alpha = 0.05) +
+    geom_hline(yintercept = P_summary %$% range(Pl_mean)) +
+    coord_cartesian(expand = F, clip = "off") +
+    facet_wrap(~parameter, scale = "free", nrow = 1) +
+    theme_minimal() +
+    theme(panel.grid = element_blank())
+# Looks fine
+
+# 7.7.2 Stan model ####
+Pl_mod <- here("Seagrass", "Stan", "Pl.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
+
+Pl_samples <- Pl_mod$sample(
+  data = P_summary %>%
+    select(Day, Pl_mean, Pl_sd, Species,
+           O2_mean_std, O2_sd_std, T_mean_std, T_sd_std,
+           P_mean_std, S_std, M_std) %>%
+    compose_data(),
+  chains = 8,
+  parallel_chains = parallel::detectCores(),
+  iter_warmup = 1e4,
+  iter_sampling = 1e4
+)
+
+# Save draws
+Pl_samples$draws() %>%
+  write_rds(here("Seagrass", "RDS", "Pl_samples.rds"))
+Pl_samples$draws(format = "df") %>%
+  write_rds(here("Seagrass", "RDS", "Pl_samples_df.rds"))
+
+# 7.7.3 Model checks ####
+# R-hat
+Pl_samples$summary() %>%
+  summarise(rhat_1.001 = mean( rhat > 1.001 ),
+            rhat_mean = mean(rhat),
+            rhat_sd = sd(rhat))
+# No rhat above 1.001. rhat = 1.00 ± 0.000101.
+
+# Chains
+Pl_samples$draws(format = "df") %>%
+  mcmc_rank_overlay() %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         device = cairo_pdf, filename = "Pl_chains.pdf",
+         path = here("Seagrass", "Plots"))
+# Looks good
+
+# Pairs
+Pl_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "log_alpha_mu[1]", "log_alpha_mu[2]",
+      "log_mu_mu[1]", "log_mu_mu[2]",
+      "log_tau_mu[1]", "log_tau_mu[2]",
+      "Pl_sigma[1]", "Pl_sigma[2]"
+    )
+  ) %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         filename = "Pl_pairs.png",
+         path = here("Seagrass", "Plots"))
+
+Pl_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "log_alpha_mu[1]", "log_alpha_O2[1]",
+      "log_alpha_T[1]", "log_alpha_M[1]",
+      "log_mu_mu[1]", "log_mu_O2[1]",
+      "log_mu_T[1]", "log_mu_M[1]",
+      "log_tau_mu[1]", "log_tau_O2[1]",
+      "log_tau_T[1]", "log_tau_M[1]"
+    )
+  ) %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         filename = "Pl_pairs_confound.png",
+         path = here("Seagrass", "Plots"))
+# No or very little correlation. All looks well.
+
+# 7.7.4 Prior-posterior comparison ####
+# Sample prior
+Pl_prior <- prior_samples(
+  model = Pl_mod,
+  data = P_summary %>%
+    select(Day, Pl_mean, Pl_sd, Species,
+           O2_mean_std, O2_sd_std, T_mean_std, T_sd_std,
+           P_mean_std, S_std, M_std) %>%
+    compose_data()
+  )
+
+Pl_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = Pl_samples,
+    group = P_summary %>% select(Species),
+    parameters = c("log_alpha_mu[Species]", "log_alpha_O2[Species]",
+                   "log_alpha_T[Species]", "log_alpha_P[Species]",
+                   "log_alpha_S[Species]", "log_alpha_M[Species]",
+                   "log_mu_mu[Species]", "log_mu_O2[Species]",
+                   "log_mu_T[Species]", "log_mu_P[Species]",
+                   "log_mu_S[Species]", "log_mu_M[Species]",
+                   "log_tau_mu[Species]", "log_tau_O2[Species]",
+                   "log_tau_T[Species]", "log_tau_P[Species]",
+                   "log_tau_S[Species]", "log_tau_M[Species]",
+                   "Pl_sigma[Species]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(group_name = "Species") %>%
+  ggsave(units = "cm", height = 30, width = 50, 
+         device = cairo_pdf, filename = "Pl_prior_posterior.pdf",
+         path = here("Seagrass", "Plots"))
+
+# 7.7.5 Parameters ####
+Pl_prior_posterior <- Pl_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = Pl_samples,
+    group = P_summary %>% select(Species),
+    parameters = c("log_alpha_mu[Species]", "log_alpha_O2[Species]",
+                   "log_alpha_T[Species]", "log_alpha_P[Species]",
+                   "log_alpha_S[Species]", "log_alpha_M[Species]",
+                   "log_mu_mu[Species]", "log_mu_O2[Species]",
+                   "log_mu_T[Species]", "log_mu_P[Species]",
+                   "log_mu_S[Species]", "log_mu_M[Species]",
+                   "log_tau_mu[Species]", "log_tau_O2[Species]",
+                   "log_tau_T[Species]", "log_tau_P[Species]",
+                   "log_tau_S[Species]", "log_tau_M[Species]",
+                   "Pl_sigma[Species]"),
+    format = "short"
+  ) %>%
+  filter(Species == "Halophila ovalis" & distribution == "prior" |
+           distribution == "posterior") %>% # Remove redundant priors
+  mutate( # Embed prior in Species
+    Species = if_else(
+      distribution == "prior", "Prior", Species
+    ) %>% fct()
+  ) %>%
+  select(-distribution) %T>%
+  print()
+
+Pl_prior_posterior %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pl_prior_posterior.rds"))
+
+Pl_contrast <- Pl_prior_posterior %>%
+  filter(Species != "Prior") %>%
+  mutate(
+    alpha = exp(log_alpha_mu),
+    mu = exp(log_mu_mu),
+    tau = exp(log_tau_mu),
+  ) %>%
+  select(starts_with("."), Species, 
+         alpha, mu, tau) %>%
+  pivot_longer(cols = c(alpha, mu, tau),
+               names_to = "Parameter") %>%
+  pivot_wider(names_from = Species) %>%
+  mutate(
+    diff = `Halophila ovalis` - `Amphibolis antarctica`,
+    ratio = `Halophila ovalis` / `Amphibolis antarctica`,
+  ) %T>%
+  print()
+
+# 7.7.6 Prediction ####
+Pl_prediction <- Pl_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "Day") %>%
+  mutate( # Predictions conditional on confounders held at their means (zero)
+    alpha = exp(log_alpha_mu),
+    mu = exp(log_mu_mu),
+    tau = exp(log_tau_mu),
+    Pl_mu = (alpha + tau) / ( 1 + exp( 5 / mu * ( Day - mu ) ) ) - tau,
+    Pl = rnorm( n() , Pl_mu , Pl_sigma )
+  ) %>% # Summarise predictions
+  group_by(Day, Species) %>%
+  median_qi(Pl_mu, Pl, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pl_prediction %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pl_prediction.rds"))
+
+
+# 7.8 Linear confounder model ####
+# 7.8.1 Prior simulation ####
+# I am only going to run this on mass-based photosynthesis, so the intercept
+# prior will be centred on the prior median of 21.
+tibble(n = 1:1e3, 
+       alpha = rnorm( 1e3 , 21 , 10 ),
+       beta_O2 = rnorm( 1e3 , 0 , 1 ), # These slopes represent the change per
+       beta_T = rnorm( 1e3 , 0 , 1 ), # standard deviation in the predictor.
+       beta_P = rnorm( 1e3 , 0 , 1 ),
+       beta_S = rnorm( 1e3 , 0 , 1 ),
+       beta_M = rnorm( 1e3 , 0 , 1 ),
+       Pm_sigma = rexp( 1e3 , 1 )) %>%
+  expand_grid(
+    Predictor = P_summary %$% 
+      seq(
+        min( c(O2_mean_std, T_mean_std, P_mean_std, S_std, M_std) ), 
+        max( c(O2_mean_std, T_mean_std, P_mean_std, S_std, M_std) ), 
+        length.out = 100
+      )
+  ) %>%
+  mutate(
+    Pm_mu = alpha + beta_O2 * Predictor + beta_T * Predictor +
+      beta_P * Predictor + beta_S * Predictor + beta_M * Predictor,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  pivot_longer(cols = c(Pm_mu, Pm),
+               names_to = "parameter") %>%
+  ggplot(aes(Predictor, value, group = n)) +
+    geom_line(alpha = 0.05) +
+    geom_hline(yintercept = P_summary %$% range(Pm_mean)) +
+    coord_cartesian(expand = F, clip = "off") +
+    facet_wrap(~parameter, scale = "free", nrow = 1) +
+    theme_minimal() +
+    theme(panel.grid = element_blank())
+# Looks reasonable
+
+# 7.8.2 Stan model ####
+Pm_confound_mod <- here("Seagrass", "Stan", "Pm_confound.stan") %>% 
+  read_file() %>%
+  write_stan_file() %>%
+  cmdstan_model()
+
+Pm_confound_samples <- Pm_confound_mod$sample(
+  data = P_summary %>%
+    select(Pm_mean, Pm_sd, Species,
+           O2_mean_std, O2_sd_std, T_mean_std, T_sd_std,
+           P_mean_std, S_std, M_std) %>%
+    compose_data(),
+  chains = 8,
+  parallel_chains = parallel::detectCores(),
+  iter_warmup = 1e4,
+  iter_sampling = 1e4
+)
+
+# Save draws
+Pm_confound_samples$draws() %>%
+  write_rds(here("Seagrass", "RDS", "Pm_confound_samples.rds"))
+Pm_confound_samples$draws(format = "df") %>%
+  write_rds(here("Seagrass", "RDS", "Pm_confound_samples_df.rds"))
+
+# 7.8.3 Model checks ####
+# R-hat
+Pm_confound_samples$summary() %>%
+  summarise(rhat_1.001 = mean( rhat > 1.001 ),
+            rhat_mean = mean(rhat),
+            rhat_sd = sd(rhat))
+# No rhat above 1.001. rhat = 1.00 ± 0.000100.
+
+# Chains
+Pm_confound_samples$draws(format = "df") %>%
+  mcmc_rank_overlay() %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         device = cairo_pdf, filename = "Pm_confound_chains.pdf",
+         path = here("Seagrass", "Plots"))
+# Looks good
+
+# Pairs
+Pm_confound_samples$draws(format = "df") %>%
+  mcmc_pairs(
+    pars = c(
+      "alpha[1]", "alpha[2]",
+      "beta_O2[1]", "beta_O2[2]",
+      "beta_T[1]", "beta_T[2]",
+      "beta_P[1]", "beta_P[2]",
+      "beta_S[1]", "beta_S[2]",
+      "beta_M[1]", "beta_M[2]"
+    )
+  ) %>%
+  ggsave(units = "cm", height = 50, width = 50, 
+         filename = "Pm_confound_pairs.png",
+         path = here("Seagrass", "Plots"))
+# No or very little correlation. All looks well.
+
+# 7.8.4 Prior-posterior comparison ####
+# Sample prior
+Pm_confound_prior <- prior_samples(
+  model = Pm_confound_mod,
+  data = P_summary %>%
+    select(Pm_mean, Pm_sd, Species,
+           O2_mean_std, O2_sd_std, T_mean_std, T_sd_std,
+           P_mean_std, S_std, M_std) %>%
+    compose_data()
+  )
+
+Pm_confound_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = Pm_confound_samples,
+    group = P_summary %>% select(Species),
+    parameters = c("alpha[Species]", "beta_O2[Species]",
+                   "beta_T[Species]", "beta_P[Species]",
+                   "beta_S[Species]", "beta_M[Species]",
+                   "Pm_sigma[Species]"),
+    format = "long"
+    ) %>%
+  prior_posterior_plot(group_name = "Species") %>%
+  ggsave(units = "cm", height = 20, width = 40, 
+         device = cairo_pdf, filename = "Pm_confound_prior_posterior.pdf",
+         path = here("Seagrass", "Plots"))
+
+# 7.8.5 Parameters ####
+Pm_confound_prior_posterior <- Pm_confound_prior %>% 
+  prior_posterior_draws(
+    posterior_samples = Pm_confound_samples,
+    group = P_summary %>% select(Species),
+    parameters = c("alpha[Species]", "beta_O2[Species]",
+                   "beta_T[Species]", "beta_P[Species]",
+                   "beta_S[Species]", "beta_M[Species]",
+                   "Pm_sigma[Species]"),
+    format = "short"
+  ) %>%
+  filter(Species == "Halophila ovalis" & distribution == "prior" |
+           distribution == "posterior") %>% # Remove redundant priors
+  mutate( # Embed prior in Species
+    Species = if_else(
+      distribution == "prior", "Prior", Species
+    ) %>% fct()
+  ) %>%
+  select(-distribution) %T>%
+  print()
+
+Pm_confound_prior_posterior %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pm_confound_prior_posterior.rds"))
+
+# 7.8.6 Prediction ####
+Pm_confound_prediction_O2 <- Pm_confound_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "O2_mean_std") %>%
+  mutate( # The other confounders are held at their mean by exclusion
+    Pm_mu = alpha + beta_O2 * O2_mean_std,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  group_by(O2_mean_std, Species) %>%
+  median_qi(Pm_mu, Pm, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_confound_prediction_T <- Pm_confound_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "T_mean_std") %>%
+  mutate(
+    Pm_mu = alpha + beta_T * T_mean_std,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  group_by(T_mean_std, Species) %>%
+  median_qi(Pm_mu, Pm, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_confound_prediction_P <- Pm_confound_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "P_mean_std") %>%
+  mutate(
+    Pm_mu = alpha + beta_P * P_mean_std,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  group_by(P_mean_std, Species) %>%
+  median_qi(Pm_mu, Pm, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_confound_prediction_S <- Pm_confound_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "S_std") %>%
+  mutate(
+    Pm_mu = alpha + beta_S * S_std,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  group_by(S_std, Species) %>%
+  median_qi(Pm_mu, Pm, .width = c(.5, .8, .9)) %T>%
+  print()
+
+Pm_confound_prediction_M <- Pm_confound_prior_posterior %>% 
+  spread_continuous(data = P_summary,
+                    group_name = "Species",
+                    predictor_name = "M_std") %>%
+  mutate(
+    Pm_mu = alpha + beta_M * M_std,
+    Pm = rnorm( n() , Pm_mu , Pm_sigma )
+  ) %>%
+  group_by(M_std, Species) %>%
+  median_qi(Pm_mu, Pm, .width = c(.5, .8, .9)) %T>%
+  print()
+
+# Combine confounder predictions
+Pm_confound_prediction <- bind_rows(
+  Pm_confound_prediction_O2 %>%
+    mutate(Confounder = "O2" %>% fct()) %>%
+    rename(Predictor = O2_mean_std),
+  Pm_confound_prediction_T %>%
+    mutate(Confounder = "T" %>% fct()) %>%
+    rename(Predictor = T_mean_std),
+  Pm_confound_prediction_P %>%
+    mutate(Confounder = "P" %>% fct()) %>%
+    rename(Predictor = P_mean_std),
+  Pm_confound_prediction_S %>%
+    mutate(Confounder = "S" %>% fct()) %>%
+    rename(Predictor = S_std),
+  Pm_confound_prediction_M %>%
+    mutate(Confounder = "M" %>% fct()) %>%
+    rename(Predictor = M_std)
+) %T>%
+  print()
+
+# Clean up
+rm(Pm_confound_prediction_O2, Pm_confound_prediction_T, Pm_confound_prediction_P,
+   Pm_confound_prediction_S, Pm_confound_prediction_M)
+
+# Reverse standardisation
+Pm_confound_prediction %<>%
+  mutate(
+    Predictor = P_summary %$% case_when(
+      Confounder == "O2" ~ Predictor * sd(O2_mean) + mean(O2_mean),
+      Confounder == "T" ~ Predictor * sd(T_mean) + mean(T_mean),
+      Confounder == "P" ~ Predictor * sd(P_mean) + mean(P_mean),
+      Confounder == "S" ~ Predictor * sd(S) + mean(S),
+      Confounder == "M" ~ Predictor * sd(M) + mean(M)
+    )
+  ) %T>%
+  print()
+
+Pm_confound_prediction %>% # Save
+  write_rds(here("Seagrass", "RDS", "Pm_confound_prediction.rds"))
+
+# 8. Figures ####
+# 8.1 Figure 1 ####
+# 8.1.1 Figure 1a ####
+# Define custom theme
+mytheme <- theme(panel.background = element_blank(),
+                 panel.grid.major = element_blank(),
+                 panel.grid.minor = element_blank(),
+                 panel.border = element_blank(),
+                 plot.margin = margin(0.2, 0.5, 0.2, 0.2, unit = "cm"),
+                 axis.line = element_line(),
+                 axis.title = element_text(size = 12, hjust = 0),
+                 axis.text = element_text(size = 10, colour = "black"),
+                 axis.ticks.length = unit(.25, "cm"),
+                 axis.ticks = element_line(colour = "black", lineend = "square"),
+                 legend.key = element_blank(),
+                 legend.key.width = unit(.25, "cm"),
+                 legend.key.height = unit(.45, "cm"),
+                 legend.key.spacing.x = unit(.5, "cm"),
+                 legend.key.spacing.y = unit(.05, "cm"),
+                 legend.background = element_blank(),
+                 legend.position = "top",
+                 legend.justification = 0,
+                 legend.text = element_text(size = 12, hjust = 0),
+                 legend.title = element_blank(),
+                 legend.margin = margin(0, 0, 0, 0, unit = "cm"),
+                 strip.background = element_blank(),
+                 strip.text = element_text(size = 12, hjust = 0),
+                 panel.spacing.x = unit(0.8, "cm"),
+                 panel.spacing.y = unit(0.6, "cm"),
+                 text = element_text(family = "Futura"))
+
+P
+Pm_prediction
+Pm_prior_posterior
+
+
+
+
+
+
+# 8.1.2 Figure 1b ####
+P
+Pl_prediction
+Pl_prior_posterior
+
+# 8.1.3 Combine panels ####
+
+
+# 8.2 Figure S1 ####
+# 8.2.1 Figure S1a ####
 
 
 Pm_confound_prior_posterior <- Pm_confound_posterior %>%
@@ -676,47 +1407,77 @@ Pm_confound_prior_posterior <- Pm_confound_posterior %>%
     .variable == "beta_S" ~ .value / sd(S),
     .variable == "beta_M" ~ .value / sd(M),
     .variable == "alpha" ~ .value
-    ))
-
-Pm_confound_prior_posterior %>%
-  ggplot(aes(.value, fill = Distribution)) +
-    facet_wrap(~ .variable, scales = "free") +
-    geom_density(colour = NA, alpha = 0.5) +
-    theme_minimal()
-# looks like priors were reasonable
-
-# 7.6.6 Prediction ####
-# calculate P_mu from parameters
-Pm_confound_mu <- Pm_confound_samples %>%
-  spread_draws(alpha, beta_O2, beta_T, beta_P, beta_S, beta_M) %>%
-  ungroup() %>%
-  pivot_longer(cols = c(beta_O2, beta_T, beta_P, beta_S, beta_M),
-               names_to = ".variable", values_to = "beta", names_prefix = "beta_") %>%
-  mutate(Predictor = P_summary %$% case_when(
-    .variable == "O2" ~ list( seq(min(O2_mean_std), max(O2_mean_std), length.out = 100) ),
-    .variable == "T" ~ list( seq(min(T_mean_std), max(T_mean_std), length.out = 100) ),
-    .variable == "P" ~ list( seq(min(P_mean_std), max(P_mean_std), length.out = 100) ),
-    .variable == "S" ~ list( seq(min(S_std), max(S_std), length.out = 100) ),
-    .variable == "M" ~ list( seq(min(M_std), max(M_std), length.out = 100) )
-  )) %>%
-  unnest(Predictor) %>% # expand the list column Predictor
-  mutate(P_mu = alpha + beta * Predictor) # since predictor variables were standardised,
-# excluding the other slopes from the equation is equivalent to setting the other predictors
-# to their mean and multiplying by their slope since mean = 0 for standardised variables
-
-Pm_confound_mu_summary <- Pm_confound_mu %>%
-  group_by(.variable, Predictor) %>%
-  mean_qi(P_mu, .width = c(.5, .8, .9)) %>%
-  mutate(Predictor_original = P_summary %$% case_when(
-    .variable == "O2" ~ Predictor * sd(O2_mean) + mean(O2_mean), # reverse standardisation
-    .variable == "T" ~ Predictor * sd(T_mean) + mean(T_mean),
-    .variable == "P" ~ Predictor * sd(P_mean) + mean(P_mean),
-    .variable == "S" ~ Predictor * sd(S) + mean(S),
-    .variable == "M" ~ Predictor * sd(M) + mean(M)
   ))
 
-rm(Pm_confound_draws, Pm_confound_mu, Pm_confound_posterior, Pm_confound_prior, 
-   Pm_confound_summary, Pm_confound_mod, Pm_confound_samples)
+# 8.2.2 Figure S1b ####
+Pm_confound_prediction
+
+
+
+# 8.2.3 Figure S1c ####
+
+
+
+# 8.2.4 Figure S1d ####
+Pm_prediction_confound
+
+# 9. Table 1 ####
+require(glue)
+Table_1 <- Pm_contrast %>%
+  mutate(Response = "Mass-based" %>% fct()) %>%
+  bind_rows(
+    Pl_contrast %>%
+      mutate(Response = "Leaf-based" %>% fct())
+  ) %>%
+  select(-starts_with(".")) %>%
+  group_by(Response, Parameter) %>%
+  summarise(
+    across(
+      everything(), 
+      list(
+        mean = mean, 
+        sd = sd, 
+        median = median
+      )
+    ),
+    n = n(),
+    P = pmax( mean( diff > 0 ) , mean( diff < 0 ) ) %>% signif(2)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    `Halophila ovalis` = glue(
+      "{signif(`Halophila ovalis_mean`, 2)} ± {signif(`Halophila ovalis_sd`, 2)} ({signif(`Halophila ovalis_median`, 2)})"
+    ),
+    `Amphibolis antarctica` = glue(
+      "{signif(`Amphibolis antarctica_mean`, 2)} ± {signif(`Amphibolis antarctica_sd`, 2)} ({signif(`Amphibolis antarctica_median`, 2)})"
+    ),
+    diff = glue(
+      "{signif(diff_mean, 2)} ± {signif(diff_sd, 2)} ({signif(diff_median, 2)})"
+    ),
+    ratio = glue(
+      "{signif(ratio_mean, 2)} ± {signif(ratio_sd, 2)} ({signif(ratio_median, 2)})"
+    )
+  ) %>%
+  select(!(contains("mean") | contains("sd") | contains("median") | n)) %T>%
+  print()
+
+Table_1 %>%
+  write_csv(here("Tables", "Table_1.csv"))
+
+require(officer)
+read_docx() %>%
+  body_add_table(value = Table_1) %>%
+  print(target = here("Tables", "Table_1.docx"))
+
+
+
+
+
+
+
+
+
+
 
 # 7.6.7 Visualisation ####
 mytheme <- theme(panel.background = element_blank(),
@@ -935,418 +1696,7 @@ ggsave(plot = Fig_S1, filename = "Fig_S1.pdf", device = cairo_pdf,
 rm(Fig_S1, Fig_S1_beta, Fig_S1_O2, Fig_S1_T, Fig_S1_P, Fig_S1_S, Fig_S1_M,
    Pm_confound_mu_summary, Pm_confound_prior_posterior, Pm_confound_stan)
 
-# 7.7 Mass-based photosynthesis ####
-# 7.7.1 Prior simulation ####
-Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  left_join(M %>% select(Species, Mass) %>%
-              mutate(Leafmass = if_else(Species == "Halophila ovalis",
-                                        Mass / 10, Mass)) %>%
-              group_by(Species) %>%
-              summarise(Leafmass = mean(Leafmass)),
-            by = "Species", relationship = "many-to-one") %>%
-  mutate(Fl = Flux * Leafmass) %>%
-  summarise(Pm_mean = mean(Flux),
-            Pm_sd = sd(Flux),
-            Pm_median = median(Flux),
-            Pl_mean = mean(Fl),
-            Pl_sd = sd(Fl),
-            Pl_median = median(Fl),
-            n = length(Flux))
 
-Prior %>%
-  filter(Variable == "Detrital respiration") %>%
-  mutate(Fl = Flux * M %>% 
-           mutate(Leafmass = if_else(Species == "Halophila ovalis",
-                                     Mass / 10, Mass)) %>%
-           pull(Leafmass) %>% mean()) %>%
-  summarise(Rm_mean = mean(Flux),
-            Rm_sd = sd(Flux),
-            Rm_median = median(Flux),
-            Rl_mean = mean(Fl),
-            Rl_sd = sd(Fl),
-            Rl_median = median(Fl),
-            n = length(Flux))
-
-# I focussed on the low mode for average Pmax across detrital age
-# alpha is Pmax at day 0 so needs to be higher, so something in between mean and median should be right
-# I also need to reduce sd for this more complicated model to run 
-Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 35.2173, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 30^2 / 5^2, rate = 30 / 5^2)), aes(x)) +
-    theme_minimal()
-
-Prior %>%
-  filter(Variable == "Detrital respiration") %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 5.355247, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 5.355247^2 / 5^2, rate = 5.355247 / 5^2)), aes(x)) + # arbitrary sd
-    theme_minimal()
-# reduce mean and sd to capture peak
-Prior %>%
-  filter(Variable == "Detrital respiration") %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 5.355247, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 2^2 / 1.5^2, rate = 2 / 1.5^2)), aes(x)) +
-    theme_minimal()
-
-Pm_prior <-
-  tibble(n = 1:1e3,
-         alpha = rgamma(n = 1e3, shape = 30^2 / 5^2, rate = 30 / 5^2),
-         tau = rgamma(n = 1e3, shape = 2^2 / 1.5^2, rate = 2 / 1.5^2),
-         k = rgamma(n = 1e3, shape = 0.2^2 / 0.1^2, rate = 0.2 / 0.1^2), # see Fig. 2b in doi 10.1093/aob/mcad167
-         mu = rgamma(n = 1e3, shape = 17^2 / 10^2, rate = 17 / 10^2)) %>% # half the experimental duration
-  filter(k * mu > 4) %>% # simulates constraining k and mu with a joint prior
-  expand_grid(Day = P_summary %$% seq(min(Day), max(Day), length.out = 50)) %>%
-  mutate(P_mu = ( alpha + tau ) / ( 1 + exp( k * ( Day - mu ) ) ) - tau)
-
-Pm_prior %>%
-  ggplot(aes(x = Day, y = P_mu, group = n)) +
-    geom_hline(yintercept = P_summary %$% c(min(Pm_mean), 0, max(Pm_mean))) +
-    geom_line(alpha = 0.05) +
-    coord_cartesian(expand = F, clip = "off") +
-    theme_minimal()
-
-# prior simulation will also need to be done with the joint prior in Stan
-Pm_prior_stan <- "
-parameters{
-  real<lower=0> alpha;
-  real<lower=0> tau;
-  real<lower=0> k;
-  real<lower=0> mu;
-}
-
-model{
-  alpha ~ gamma( 30^2 / 5^2 , 30 / 5^2 );
-  tau ~ gamma( 2^2 / 1.5^2 , 2 / 1.5^2 );
-  k ~ gamma( 0.2^2 / 0.1^2 , 0.2 / 0.1^2 );
-  mu ~ gamma( 17^2 / 10^2 , 17 / 10^2 );
-  target += gamma_lpdf( k * mu | 4^2 / 1^2 , 4 / 1^2 );
-}
-"
-
-Pm_prior_mod <- cmdstan_model(stan_file = write_stan_file(code = Pm_prior_stan))
-Pm_prior_samples <- Pm_prior_mod$sample(data = list(), # no data to condition on
-                                        seed = 100,
-                                        chains = 8,
-                                        parallel_chains = parallel::detectCores(),
-                                        iter_warmup = 1e4,
-                                        iter_sampling = 1e4)
-
-Pm_prior_draws <- Pm_prior_samples$draws(format = "df")
-
-Pm_prior_draws %>%
-  ggplot() +
-  geom_density(aes(alpha), fill = "black", alpha = 0.5) +
-  geom_density(aes(rgamma( 8e4, 30^2 / 5^2 , 30 / 5^2 )),
-               fill = "red", alpha = 0.5) +
-  theme_minimal()
-# unchanged
-
-Pm_prior_draws %>%
-  ggplot() +
-  geom_density(aes(tau), fill = "black", alpha = 0.5) +
-  geom_density(aes(rgamma( 8e4, 2^2 / 1.5^2 , 2 / 1.5^2 )),
-               fill = "red", alpha = 0.5) +
-  theme_minimal()
-# unchanged
-
-Pm_prior_draws %>%
-  ggplot() +
-    geom_density(aes(k), fill = "black", alpha = 0.5) +
-    geom_density(aes(rgamma( 8e4, 0.2^2 / 0.1^2 , 0.2 / 0.1^2 )),
-                 fill = "red", alpha = 0.5) +
-    scale_x_continuous(limits = c(0, 0.5), oob = scales::oob_keep) +
-    theme_minimal()
-# shifted by joint prior
-
-Pm_prior_draws %>%
-  ggplot() +
-    geom_density(aes(mu), fill = "black", alpha = 0.5) +
-    geom_density(aes(rgamma( 8e4, 17^2 / 10^2 , 17 / 10^2 )),
-                 fill = "red", alpha = 0.5) +
-    scale_x_continuous(limits = c(0, 50), oob = scales::oob_keep) +
-    theme_minimal()
-# shifted by joint prior
-
-Pm_prior_draws %>%
-  slice_sample(n = 1e3) %>% # subsample
-  expand_grid(Day = P_summary %$% seq(min(Day), max(Day), length.out = 50)) %>%
-  mutate(P_mu = ( alpha + tau ) / ( 1 + exp( k * ( Day - mu ) ) ) - tau) %>%
-  ggplot(aes(x = Day, y = P_mu, group = .draw)) +
-    geom_hline(yintercept = P_summary %$% c(min(Pm_mean), 0, max(Pm_mean))) +
-    geom_line(alpha = 0.05) +
-    coord_cartesian(expand = F, clip = "off") +
-    theme_minimal()
-
-# 7.7.2 Stan model ####
-Pm_stan <- "
-data{
-  int n;
-  int n_Species;
-  vector[n] Pm_mean;
-  vector[n] Pm_sd;
-  vector[n] Day;
-  array[n] int Species;
-}
-
-parameters{
-  // Estimate of Pm for measurment error
-  vector[n] Pm;
-
-  // Species parameters
-  vector<lower=0>[n_Species] alpha;
-  vector<lower=0>[n_Species] tau;
-  vector<lower=0>[n_Species] k;
-  vector<lower=0>[n_Species] mu;
-
-  // Pooled parameters
-  real<lower=0> alpha_mu;
-  real<lower=0> tau_mu;
-  real<lower=0> k_mu;
-  real<lower=0> mu_mu;
-
-  real<lower=0> alpha_theta;
-  real<lower=0> tau_theta;
-  real<lower=0> k_theta;
-  real<lower=0> mu_theta;
-
-  // Likelihood uncertainty parameter
-  real<lower=0> Pm_sigma;
-}
-
-model{
-  // Pooled priors
-  alpha_mu ~ gamma( 30^2 / 5^2 , 30 / 5^2 );
-  tau_mu ~ gamma( 2^2 / 1.5^2 , 2 / 1.5^2 );
-  k_mu ~ gamma( 0.2^2 / 0.1^2 , 0.2 / 0.1^2 );
-  mu_mu ~ gamma( 17^2 / 10^2 , 17 / 10^2 );
-
-  alpha_theta ~ exponential( 1 );
-  tau_theta ~ exponential( 1 );
-  k_theta ~ exponential( 1 );
-  mu_theta ~ exponential( 0.5 ); // mu is expected to vary more
-
-  // Constraint on k_mu and mu_mu (joint prior)
-  target += gamma_lpdf( k_mu * mu_mu | 4^2 / 1^2 , 4 / 1^2 );
-
-  // Species priors
-  alpha ~ gamma( alpha_mu / alpha_theta , 1 / alpha_theta );
-  tau ~ gamma( tau_mu / tau_theta , 1 / tau_theta );
-  k ~ gamma( k_mu / k_theta , 1 / k_theta );
-  mu ~ gamma( mu_mu / mu_theta , 1 / mu_theta );
-
-  // Constraint on k and mu (joint prior)
-  target += gamma_lpdf( k .* mu | 4^2 / 1^2 , 4 / 1^2 );
-
-  // Likelihood uncertainty prior
-  Pm_sigma ~ exponential( 1 );
-
-  // Model
-  vector[n] Pm_mu;
-  for ( i in 1:n ) {
-    Pm_mu[i] =
-    ( alpha[Species[i]] + tau[Species[i]] ) /
-    ( 1 + exp( k[Species[i]] * ( Day[i] - mu[Species[i]] ) ) )
-    - tau[Species[i]];
-  }
-
-  // Likelihood incorporating measurement error
-  Pm ~ normal( Pm_mu , Pm_sigma );
-  Pm_mean ~ normal( Pm , Pm_sd );
-}
-"
-Pm_mod <- cmdstan_model(stan_file = write_stan_file(code = Pm_stan))
-
-Pm_samples <- Pm_mod$sample(data = P_summary %>%
-                              select(Pm_mean, Pm_sd, Day, Species) %>%
-                              compose_data(),
-                            seed = 100,
-                            chains = 8,
-                            parallel_chains = parallel::detectCores(),
-                            iter_warmup = 1e4,
-                            iter_sampling = 1e4)
-
-# 7.7.3 Model checks ####
-Pm_summary <- Pm_samples$summary()
-Pm_summary %>%
-  filter(rhat > 1.001) # no rhat above 1.001
-
-Pm_draws <- Pm_samples$draws(format = "df")
-
-Pm_draws %>% mcmc_rank_overlay() # chains look fine
-
-Pm_draws %>% mcmc_pairs(pars = c("alpha[1]", "tau[1]", "k[1]", "mu[1]"))
-Pm_draws %>% mcmc_pairs(pars = c("alpha[2]", "tau[2]", "k[2]", "mu[2]"))
-
-# 7.7.4 Prior-posterior comparison ####
-source("functions.R") # Load some custom functions that make dealing with
-# multilevel Stan models easier
-# Sample prior
-Pm_prior <- prior_samples(
-  model = Pm_mod,
-  data = P_summary %>%
-    select(Pm_mean, Pm_sd, Day, Species) %>%
-    compose_data(),
-  adapt_delta = 0.99 # smoother prior
-)
-
-Pm_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pm_samples,
-    group = P_summary %>% select(Species),
-    parameters = c("alpha_mu", "tau_mu", "k_mu", "mu_mu", 
-                   "alpha_theta", "tau_theta", "k_theta", "mu_theta",
-                   "alpha[Species]", "tau[Species]", "k[Species]", "mu[Species]",
-                   "Pm_sigma"),
-    format = "long"
-  ) %>%
-  prior_posterior_plot(group_name = "Species", ridges = FALSE)
-# Looks fine
-
-Pm_prior_posterior_hyper <- Pm_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pm_samples,
-    parameters = c("alpha_mu", "tau_mu", "k_mu", "mu_mu", 
-                   "alpha_theta", "tau_theta", "k_theta", "mu_theta",
-                   "Pm_sigma"),
-    format = "short"
-  ) %>% # Calculate predictions for new seagrasses.
-  mutate(alpha = rgamma( n() , alpha_mu / alpha_theta , 1 / alpha_theta ),
-         tau = rgamma( n() , tau_mu / tau_theta , 1 / tau_theta ),
-         k = rgamma( n() , k_mu / k_theta , 1 / k_theta ),
-         mu = rgamma( n() , mu_mu / mu_theta , 1 / mu_theta ),
-         Group = if_else(distribution == "posterior",
-                         "Seagrasses", "Simulated prior") %>% fct()) %>%
-  select(-distribution)
-  
-Pm_prior_posterior_species <- Pm_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pm_samples,
-    group = P_summary %>% select(Species),
-    parameters = c("alpha[Species]", "tau[Species]", "k[Species]", "mu[Species]",
-                   "Pm_sigma"),
-    format = "short"
-  ) %>% 
-  # Since I want only one grouping variable, there is redundancy in distribution.
-  filter(!(Species == "Halophila ovalis" & distribution == "prior")) %>% # Remove redundant prior.
-  mutate(Group = if_else(distribution == "prior", # Add Prior to Season.
-                         "Prior", Species) %>% fct()) %>%
-  select(-c(distribution, Species))
-  
-Pm_prior_posterior <- Pm_prior_posterior_hyper %>%
-  select(starts_with("."), Group, alpha, tau, k, mu, Pm_sigma) %>%
-  bind_rows(Pm_prior_posterior_species) %>%
-  pivot_longer(cols = c(alpha, tau, k, mu, Pm_sigma),
-               names_to = ".variable",
-               values_to = ".value")
-
-require(ggridges)
-Pm_prior_posterior %>%
-  filter(.variable != "Pm_sigma" &
-           Group %in% c("Prior", "Simulated prior", "Seagrasses")) %>%
-  ggplot(aes(.value, Group)) +
-    geom_density_ridges(bandwidth = c(0.5, 0.01, 0.7, 0.1),
-                        from = c(10, rep(0, 3)), to = c(50, 0.6, 42, 9)) +
-    scale_x_continuous(oob = scales::oob_keep) +
-    facet_grid(~.variable, scales = "free_x")
-# The simulated prior using rgamma() is not the same, especially for
-# k and mu because it does not account for the joint prior on k and mu.
-# Similarly, the simulation for new seagrasses using rgamma() does not
-# account for the joint prior on k and mu because the constraint is
-# only applied to k_mu and mu_mu as well as k and mu for each species.
-# This does not affect k_theta and mu_theta which are estimated
-# independently of the constraint on k and mu. A better model is required
-# which accounts for the relationship between k and mu hierarchically.
-# The easiest way is to reparameterise the logistic function in terms
-# of k and k * mu, which represents the intercept of the exponent or
-# log odds at Day = 0. Then i can constraint the log odds at t0 to be
-# near certainty, i.e. near the maximum photosynthesis. In terms of 
-# probability, log odds of 5 =
-1/(1+exp(-5)) # 0.9933071
-# I tried parameterising mu in terms of k and k*mu but found it better
-# to parameterise k in terms of k*mu to avoid crazy tails on mu.
-
-# 7.7.5 Improved Stan model ####
-Pm_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Seagrass", "Stan", "Pm.stan")))
-
-Pm_samples <- Pm_mod$sample(data = P_summary %>%
-                              select(Pm_mean, Pm_sd, Day, Species) %>%
-                              compose_data(),
-                            seed = 100,
-                            chains = 8,
-                            parallel_chains = parallel::detectCores(),
-                            iter_warmup = 1e4,
-                            iter_sampling = 1e4,
-                            adapt_delta = 0.99)
-
-# 7.7.6 Model checks ####
-Pm_summary <- Pm_samples$summary()
-Pm_summary %>%
-  filter(rhat > 1.001) # no rhat above 1.001
-
-Pm_draws <- Pm_samples$draws(format = "df")
-
-Pm_draws %>% mcmc_rank_overlay() # chains look fine
-
-Pm_draws %>% mcmc_pairs(pars = c("alpha[1]", "tau[1]", "k[1]", 
-                                 "kmu", "mu[1]"))
-Pm_draws %>% mcmc_pairs(pars = c("alpha[2]", "tau[2]", "k[2]", 
-                                 "kmu", "mu[2]"))
-# Correlation between k and kmu as expected.
-
-# 7.7.7 Prior-posterior comparison ####
-# Sample prior
-Pm_prior <- prior_samples(
-  model = Pm_mod,
-  data = P_summary %>%
-    select(Pm_mean, Pm_sd, Day, Species) %>%
-    compose_data(),
-  adapt_delta = 0.99
-)
-
-Pm_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pm_samples,
-    group = P_summary %>% select(Species),
-    parameters = c("alpha_mu", "tau_mu", "mu_mu", "kmu", 
-                   "alpha_theta", "tau_theta", "mu_theta",
-                   "alpha[Species]", "tau[Species]", "mu[Species]", 
-                   "Pm_sigma"),
-    format = "long"
-  ) %>%
-  prior_posterior_plot(group_name = "Species", ridges = FALSE)
-# Looks fine
-
-# Combine prior and posteriors for seagrass- and species-level parameters
-Pm_prior_posterior <- Pm_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pm_samples,
-    group = P_summary %>% select(Species),
-    parameters = c("alpha[Species]", "tau[Species]", "k[Species]", "mu[Species]",
-                   "Pm_sigma"),
-    format = "short"
-  ) %>% 
-  # Since I want only one grouping variable, there is redundancy in distribution.
-  filter(!(Species == "Halophila ovalis" & distribution == "prior")) %>% # Remove redundant prior.
-  mutate(Group = if_else(distribution == "prior", # Add Prior to Group.
-                         "Prior", Species) %>% fct()) %>%
-  select(-c(distribution, Species)) %>% # Remove distribution and Species
-  bind_rows( # Bind to seagrass-level parameters
-    Pm_samples %>%
-      spread_draws(alpha_new, tau_new, mu_new, k_new, Pm_sigma) %>%
-      rename(alpha = alpha_new, tau = tau_new, mu = mu_new, k = k_new) %>%
-      mutate(Group = "Seagrasses" %>% fct())
-  ) %>% # Pivot longer
-  pivot_longer(cols = c(alpha, tau, k, mu, Pm_sigma),
-               names_to = ".variable",
-               values_to = ".value") %T>%
-  print()
 
 # Reorder factors for visualisation
 Pm_prior_posterior %<>%
@@ -1490,165 +1840,6 @@ Fig_1a_bottom <- ggplot() +
                   mytheme
 Fig_1a_bottom
 
-# 7.8 Leaf-based photosynthesis ####
-# 7.8.1 Prior simulation ####
-# based on Pm I know alpha needs to be constrained for posteriors to converge on one mode
-# for this to be possible for leaf-based estimates, alpha needs to be made as similar as
-# possible, by adjusting the number of H. ovalis leaves used in the model
-# calculate overall mean and sd 
-
-M %>% group_by(Species) %>%
-  summarise(Mass = mean(Mass)) %>%
-  pivot_wider(names_from = Species, values_from = Mass) %>%
-  mutate(Ratio = `Halophila ovalis` / `Amphibolis antarctica`)
-# the sample mass of 10 H. ovalis leaves was on average only 
-# 71.5% of that of the single A. antarctica leaf
-# this means one A. antarctica leaf is equivalent in mass to
-10 / 0.715
-# about 14 H. ovalis leaves
-# however, this is similar enough to analyse on a sample basis
-
-Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  left_join(M %>% select(Species, Mass) %>%
-              mutate(Leafmass = if_else(Species == "Halophila ovalis",
-                                        Mass / 10, Mass)) %>%
-              group_by(Species) %>%
-              summarise(Leafmass = mean(Leafmass),
-                        Samplemass = mean(Mass)),
-            by = "Species", relationship = "many-to-one") %>%
-  mutate(Fl = Flux * Leafmass,
-         Fs = Flux * Samplemass) %>%
-  summarise(Pl_mean = mean(Fl),
-            Pl_sd = sd(Fl),
-            Pl_median = median(Fl),
-            Ps_mean = mean(Fs),
-            Ps_sd = sd(Fs),
-            Ps_median = median(Fs),
-            n = length(Flux))
-
-Prior %>%
-  filter(Variable == "Detrital respiration") %>%
-  mutate(Fl = Flux * M %>% 
-           mutate(Leafmass = if_else(Species == "Halophila ovalis",
-                                     Mass / 10, Mass)) %>%
-           pull(Leafmass) %>% mean(),
-         Fs = Flux * M %>%  pull(Mass) %>% mean()) %>%
-  summarise(Rl_mean = mean(Fl),
-            Rl_sd = sd(Fl),
-            Rl_median = median(Fl),
-            Rs_mean = mean(Fs),
-            Rs_sd = sd(Fs),
-            Rs_median = median(Fs),
-            n = length(Flux))
-
-# prior simulation for sample-based estimates
-Prior %>%
-  filter(Variable == "Light-saturated net photosynthesis") %>%
-  left_join(M %>% select(Species, Mass) %>%
-              group_by(Species) %>%
-              summarise(Samplemass = mean(Mass)),
-            by = "Species", relationship = "many-to-one") %>%
-  mutate(Flux = Flux * Samplemass) %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 15.85307, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 16^2 / 4^2, rate = 16 / 4^2)), aes(x)) +
-    theme_minimal()
-
-# focus on peak
-Prior %>%
-  filter(Variable == "Detrital respiration") %>%
-  mutate(Flux = Flux * M %>% pull(Mass) %>% mean()) %>%
-  ggplot() +
-    geom_density(aes(Flux), fill = "red", alpha = 0.5, colour = NA) +
-    geom_vline(xintercept = 2.782084, colour = "red") +
-    geom_density(data = tibble(x = rgamma(n = 1e3, shape = 1^2 / 0.8^2, rate = 1 / 0.8^2)), aes(x)) + 
-    theme_minimal()
-
-# 7.8.2 Stan model ####
-Pl_mod <- cmdstan_model(stan_file = write_stan_file(code = here("Stan", "Pl.stan")))
-
-Pl_samples <- Pl_mod$sample(data = P_summary %>%
-                              select(Pl_mean, Pl_sd, Day, Species) %>%
-                              # revert H. ovalis leaf-based estimates to sample mass
-                              # to make them comparable to A. antarctica estimates
-                              mutate(Pl_mean = if_else(Species == "Halophila ovalis",
-                                                       Pl_mean * 10, Pl_mean),
-                                     Pl_sd = if_else(Species == "Halophila ovalis",
-                                                     Pl_sd * 10, Pl_sd)) %>%
-                              compose_data(),
-                            seed = 100,
-                            chains = 8,
-                            parallel_chains = parallel::detectCores(),
-                            iter_warmup = 1e4,
-                            iter_sampling = 1e4)
-
-# 7.8.3 Model checks ####
-Pl_summary <- Pl_samples$summary()
-Pl_summary %>%
-  filter(rhat > 1.001) # no rhat above 1.001
-
-Pl_draws <- Pl_samples$draws(format = "df")
-
-Pl_draws %>% mcmc_rank_overlay() # chains look fine
-
-Pl_draws %>% mcmc_pairs(pars = c("alpha[1]", "tau[1]", "k[1]", 
-                                 "kmu", "mu[1]"))
-Pl_draws %>% mcmc_pairs(pars = c("alpha[2]", "tau[2]", "k[2]",
-                                 "kmu", "mu[2]"))
-# Correlation between k and kmu as expected.
-
-# 7.8.4 Prior-posterior comparison ####
-# Sample prior
-Pl_prior <- prior_samples(
-  model = Pl_mod,
-  data = P_summary %>%
-    select(Pl_mean, Pl_sd, Day, Species) %>%
-    mutate(Pl_mean = if_else(Species == "Halophila ovalis",
-                             Pl_mean * 10, Pl_mean),
-           Pl_sd = if_else(Species == "Halophila ovalis",
-                           Pl_sd * 10, Pl_sd)) %>%
-    compose_data()
-)
-
-Pl_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pl_samples,
-    group = P_summary %>% select(Species),
-    parameters = c("mu_mu", "kmu", "mu_theta",
-                   "alpha[Species]", "tau[Species]", "mu[Species]", 
-                   "Pl_sigma"),
-    format = "long"
-  ) %>%
-  prior_posterior_plot(group_name = "Species", ridges = FALSE)
-# Looks fine
-
-# Combine prior and posteriors for seagrass- and species-level parameters
-Pl_prior_posterior <- Pl_prior %>% 
-  prior_posterior_draws(
-    posterior_samples = Pl_samples,
-    group = P_summary %>% select(Species),
-    parameters = c("alpha[Species]", "tau[Species]", "k[Species]", "mu[Species]",
-                   "Pl_sigma"),
-    format = "short"
-  ) %>% 
-  # Since I want only one grouping variable, there is redundancy in distribution.
-  filter(!(Species == "Halophila ovalis" & distribution == "prior")) %>% # Remove redundant prior.
-  mutate(Group = if_else(distribution == "prior", # Add Prior to Group.
-                         "Prior", Species) %>% fct()) %>%
-  select(-c(distribution, Species)) %>% # Remove distribution and Species
-  bind_rows( # Bind to seagrass-level parameters
-    Pl_samples %>%
-      spread_draws(mu_new, k_new, Pl_sigma) %>%
-      rename(mu = mu_new, k = k_new) %>%
-      mutate(Group = "Seagrasses" %>% fct(),
-             alpha = NA, tau = NA) # alpha and tau were not estimates for new seagrasses
-  ) %>% # Pivot longer
-  pivot_longer(cols = c(alpha, tau, k, mu, Pl_sigma),
-               names_to = ".variable",
-               values_to = ".value") %T>%
-  print()
 
 # Reorder factors for visualisation
 Pl_prior_posterior %<>%

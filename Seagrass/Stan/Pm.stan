@@ -1,71 +1,115 @@
 data{
   int n;
+  vector[n] Day; // Main continuous predictor
+  vector[n] Pm_mean; // Response
+  vector[n] Pm_sd; // Response is measured with error
+  array[n] int Species; // Main categorical predictor
   int n_Species;
-  vector[n] Pm_mean;
-  vector[n] Pm_sd;
-  vector[n] Day;
-  array[n] int Species;
+  vector[n] O2_mean_std; // Confounders
+  vector[n] O2_sd_std; // O2 and temperature are
+  vector[n] T_mean_std; // measured with error
+  vector[n] T_sd_std;
+  vector[n] P_mean_std;
+  vector[n] S_std;
+  vector[n] M_std;
 }
 
 parameters{
-  // Estimate of Pm for measurment error
+  // Unobserved/true/latent variables
   vector[n] Pm;
+  vector[n] O2;
+  vector[n] T;
 
   // Species parameters
-  vector<lower=0>[n_Species] alpha;
-  vector<lower=0>[n_Species] tau;
-  vector<lower=0>[n_Species] mu;
+  vector[n_Species] log_alpha_mu;
+  vector[n_Species] log_mu_mu;
+  vector[n_Species] log_tau_mu;
 
-  // Pooled parameters
-  real<lower=0> alpha_mu;
-  real<lower=0> tau_mu;
-  real<lower=0> mu_mu;
-  real<lower=0> kmu; // complete pooling on kmu
+  // Confounder effects
+  vector[n_Species] log_alpha_O2;
+  vector[n_Species] log_alpha_T;
+  vector[n_Species] log_alpha_P;
+  vector[n_Species] log_alpha_S;
+  vector[n_Species] log_alpha_M;
+  vector[n_Species] log_mu_O2;
+  vector[n_Species] log_mu_T;
+  vector[n_Species] log_mu_P;
+  vector[n_Species] log_mu_S;
+  vector[n_Species] log_mu_M;
+  vector[n_Species] log_tau_O2;
+  vector[n_Species] log_tau_T;
+  vector[n_Species] log_tau_P;
+  vector[n_Species] log_tau_S;
+  vector[n_Species] log_tau_M;
 
-  real<lower=0> alpha_theta;
-  real<lower=0> tau_theta;
-  real<lower=0> mu_theta;
-
-  // Likelihood uncertainty parameter
-  real<lower=0> Pm_sigma;
-}
-
-transformed parameters{
-  vector<lower=0>[n_Species] k = kmu ./ mu;
+  // Likelihood standard deviation
+  vector<lower=0>[n_Species] Pm_sigma;
 }
 
 model{
-  // Pooled priors
-  alpha_mu ~ gamma( 30^2 / 5^2 , 30 / 5^2 );
-  tau_mu ~ gamma( 2^2 / 1^2 , 2 / 1^2 ); // reduced sd because variation is added by theta
-  mu_mu ~ gamma( 25^2 / 10^2 , 25 / 10^2 ); // estimated as 5/0.2
-  kmu ~ gamma( 5^2 / 1^2 , 5 / 1^2 );
-
-  alpha_theta ~ exponential( 1 );
-  tau_theta ~ exponential( 1 );
-  mu_theta ~ exponential( 1 ); 
-
   // Species priors
-  alpha ~ gamma( alpha_mu / alpha_theta , 1 / alpha_theta );
-  tau ~ gamma( tau_mu / tau_theta , 1 / tau_theta );
-  mu ~ gamma( mu_mu / mu_theta , 1 / mu_theta );
-
-  // Likelihood uncertainty prior
+  log_alpha_mu ~ normal( log(21) , 0.4 );
+  log_mu_mu ~ normal( log(14) , 0.6 );
+  log_tau_mu ~ normal( log(2) , 0.4 );
+  
+  // Confounder priors
+  O2 ~ normal( 0 , 1 ); // All confounders are standardised, hence the standard normal
+  O2_mean_std ~ normal( O2 , O2_sd_std ); // Normal measurement error
+  T ~ normal( 0 , 1 );
+  T_mean_std ~ normal( T , T_sd_std );
+  
+  log_alpha_O2 ~ normal( 0 , 1 ); // these slopes are the change per standard deviation
+  log_alpha_T ~ normal( 0 , 1 ); 
+  log_alpha_P ~ normal( 0 , 1 );
+  log_alpha_S ~ normal( 0 , 1 );
+  log_alpha_M ~ normal( 0 , 1 );
+  log_mu_O2 ~ normal( 0 , 1 );
+  log_mu_T ~ normal( 0 , 1 );
+  log_mu_P ~ normal( 0 , 1 );
+  log_mu_S ~ normal( 0 , 1 );
+  log_mu_M ~ normal( 0 , 1 );
+  log_tau_O2 ~ normal( 0 , 1 );
+  log_tau_T ~ normal( 0 , 1 );
+  log_tau_P ~ normal( 0 , 1 );
+  log_tau_S ~ normal( 0 , 1 );
+  log_tau_M ~ normal( 0 , 1 );
+  
+  // Likelihood standard deviation prior
   Pm_sigma ~ exponential( 1 );
 
   // Model
-  vector[n] Pm_mu = ( alpha[Species] + tau[Species] ) ./
-    ( 1 + exp( k[Species] .* ( Day - mu[Species] ) ) ) 
-    - tau[Species];
-
-  // Likelihood incorporating measurement error
-  Pm ~ normal( Pm_mu , Pm_sigma );
+  /// Parameters
+  vector[n] alpha = exp(
+      log_alpha_mu[Species] + 
+      log_alpha_O2[Species] .* O2 + 
+      log_alpha_T[Species] .* T + 
+      log_alpha_P[Species] .* P_mean_std + 
+      log_alpha_S[Species] .* S_std + 
+      log_alpha_M[Species] .* M_std
+  );
+  
+  vector[n] mu = exp(
+      log_mu_mu[Species] + 
+      log_mu_O2[Species] .* O2 + 
+      log_mu_T[Species] .* T + 
+      log_mu_P[Species] .* P_mean_std + 
+      log_mu_S[Species] .* S_std + 
+      log_mu_M[Species] .* M_std
+  );
+  
+  vector[n] tau = exp(
+      log_tau_mu[Species] + 
+      log_tau_O2[Species] .* O2 + 
+      log_tau_T[Species] .* T + 
+      log_tau_P[Species] .* P_mean_std + 
+      log_tau_S[Species] .* S_std + 
+      log_tau_M[Species] .* M_std
+  );
+  
+  /// Function
+  vector[n] Pm_mu = ( alpha + tau ) .* inv_logit( -5 / mu .* ( Day - mu ) ) - tau;
+  
+  // Normal likelihood with normal measurement error
+  Pm ~ normal( Pm_mu , Pm_sigma[Species] );
   Pm_mean ~ normal( Pm , Pm_sd );
-}
-
-generated quantities {
-  real alpha_new = gamma_rng( alpha_mu / alpha_theta , 1 / alpha_theta );
-  real tau_new = gamma_rng( tau_mu / tau_theta , 1 / tau_theta );
-  real mu_new = gamma_rng( mu_mu / mu_theta , 1 / mu_theta );
-  real k_new = kmu / mu_new;
 }
