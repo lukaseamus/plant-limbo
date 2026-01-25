@@ -944,8 +944,12 @@ meta_mu_effect_species <- meta_prior_posterior_species %>%
   ) %>%
   ungroup() %>%
   mutate(
+    mu_median_rounded = case_when(
+      mu_median < 100 ~ signif(mu_median, 2),
+      mu_median < 1e3 ~ signif(mu_median, 3)
+    ),
     mu = glue(
-      "{signif(mu_median, 2)} ({signif(log_mu_mean, 2)} ± {signif(log_mu_sd, 2)})"
+      "{mu_median_rounded} ({signif(log_mu_mean, 2)} ± {signif(log_mu_sd, 2)})"
     )
   ) %>%
   arrange(mu_median) %>%
@@ -970,8 +974,12 @@ meta_mu_effect_experiment <- meta_posterior_experiment %>%
   ) %>%
   ungroup() %>%
   mutate(
+    mu_median_rounded = case_when(
+      mu_median < 100 ~ signif(mu_median, 2),
+      mu_median < 1e3 ~ signif(mu_median, 3)
+    ),
     mu = glue(
-      "{signif(mu_median, 2)} ({signif(log_mu_mean, 2)} ± {signif(log_mu_sd, 2)})"
+      "{mu_median_rounded} ({signif(log_mu_mean, 2)} ± {signif(log_mu_sd, 2)})"
     )
   ) %>%
   arrange(mu_median) %>%

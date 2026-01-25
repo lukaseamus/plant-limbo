@@ -1101,7 +1101,6 @@ Pl_prediction <- Pl_prior_posterior %>%
 Pl_prediction %>% # Save
   write_rds(here("Seagrass", "RDS", "Pl_prediction.rds"))
 
-
 # 7.8 Linear confounder model ####
 # 7.8.1 Prior simulation ####
 # I am only going to run this on mass-based photosynthesis, so the intercept
@@ -1348,7 +1347,6 @@ Pm_confound_prediction %>% # Save
 
 # 8. Figures ####
 # 8.1 Figure 1 ####
-# 8.1.1 Figure 1a ####
 # Define custom theme
 mytheme <- theme(panel.background = element_blank(),
                  panel.grid.major = element_blank(),
@@ -1373,53 +1371,715 @@ mytheme <- theme(panel.background = element_blank(),
                  legend.margin = margin(0, 0, 0, 0, unit = "cm"),
                  strip.background = element_blank(),
                  strip.text = element_text(size = 12, hjust = 0),
-                 panel.spacing.x = unit(0.8, "cm"),
+                 panel.spacing.x = unit(1, "cm"),
                  panel.spacing.y = unit(0.6, "cm"),
                  text = element_text(family = "Futura"))
 
-P
-Pm_prediction
-Pm_prior_posterior
+Fig_1_Pm <- Pm_prediction %>%
+  filter(Species != "Prior") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_violin(data = P %>%
+                  mutate(Species = Species %>% fct_relevel("Halophila ovalis")),
+                aes(Day, Pm, fill = Species, colour = Species, group = ID),
+                alpha = 0.2, position = "identity", width = 2) +
+    geom_ribbon(aes(Day, ymin = Pm.lower, ymax = Pm.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Day, Pm, colour = Species)) +
+    stat_slab(data = Pm_prior_posterior %>%
+                filter(Species != "Prior"),
+              aes(-1, exp(log_alpha_mu), fill = Species),
+              colour = NA, scale = -4, n = 2^10) +
+    stat_slab(data = Pm_prior_posterior %>%
+                filter(Species != "Prior"),
+              aes(exp(log_mu_mu), -10, fill = Species),
+              colour = NA, scale = 4, n = 2^10) +
+    stat_slab(data = Pm_prior_posterior %>%
+                filter(Species != "Prior"),
+              aes(42, -exp(log_tau_mu), fill = Species),
+              colour = NA, scale = 4, n = 2^10) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518"), guide = "none") +
+    scale_fill_manual(values = c("#bdd268", "#4a7518"), guide = "none") +
+    scale_alpha_manual(values = c(0.5, 0.4, 0.3), guide = "none") +
+    scale_x_continuous(breaks = seq(0, 42, by = 7)) +
+    scale_y_continuous(breaks = seq(-10, 50, by = 10),
+                       labels = scales::label_number(style_negative = "minus")) +
+    facet_grid(NA ~ Species, switch = "y") +
+    labs(y = expression(italic(P)["max"]*" (µmol O"[2]*" g"^-1*" h"^-1*")"),
+         x = "Detrital age (days)") +
+    coord_cartesian(xlim = c(0, 42), ylim = c(-10, 50), 
+                    expand = FALSE, clip = "off") +
+    mytheme +
+    theme(strip.text = element_text(face = "italic"),
+          strip.text.y = element_text(size = 20, colour = "transparent"),
+          panel.spacing.x = unit(1.5, "cm"),
+          plot.margin = margin(0.2, 1, 0.2, 0.2, unit = "cm"))
 
+Fig_1_Pm # densities are not ideal because unbounded
 
+require(ggh4x)
+Fig_1_Pl <- Pl_prediction %>%
+  filter(Species != "Prior") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_violin(data = P %>%
+                  mutate(Species = Species %>% fct_relevel("Halophila ovalis")),
+                aes(Day, Pl, fill = Species, colour = Species, group = ID),
+                alpha = 0.2, position = "identity", width = 2) +
+    geom_ribbon(aes(Day, ymin = Pl.lower, ymax = Pl.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Day, Pl, colour = Species)) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518"), guide = "none") +
+    scale_fill_manual(values = c("#bdd268", "#4a7518"), guide = "none") +
+    scale_alpha_manual(values = c(0.5, 0.4, 0.3), guide = "none") +
+    facet_wrap(~ Species, strip.position = "left", scales = "free") +
+    facetted_pos_scales(
+      y = list(
+        Species == "Halophila ovalis" ~
+          scale_y_continuous(limits = c(0, 2.5),
+                             breaks = seq(0, 2.5, by = 0.5),
+                             labels = scales::label_number(accuracy = c(1, 0.1, 1, 0.1, 1, 0.1))),
+        Species == "Amphibolis antarctica" ~
+          scale_y_continuous(limits = c(-10, 50),
+                             breaks = seq(-10, 50, by = 10),
+                             labels = scales::label_number(style_negative = "minus"))
+      )
+    ) +
+    scale_x_continuous(breaks = seq(0, 35, by = 7)) +
+    labs(y = expression(italic(P)["max"]*" (µmol O"[2]*" leaf"^-1*" h"^-1*")"),
+         x = "Detrital age (days)") +
+    coord_cartesian(xlim = c(0, 35), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(strip.text = element_text(face = "italic"),
+          strip.text.y = element_text(size = 20, colour = "transparent"),
+          plot.margin = margin(0.2, 1, 0.2, 0.2, unit = "cm"))
 
+Fig_1_Pl
+# I can't even remotely achieve the same effect with densities 
+# as in Fig_1_Pm. The only solution would be separate plots, but 
+# I do not think the additional insight gained from Pl is worthwhile. So
+# I'll go with a reworked Fig_1_Pm.
 
+# Build densities manually
+alpha_dens <- Pm_prior_posterior %>%
+  group_by(Species) %>%
+  reframe(y = c(0, density(exp(log_alpha_mu), n = 2^10, from = 0, to = 50, bw = 60 * 0.02)$x, 50),
+          x = c(0, density(exp(log_alpha_mu), n = 2^10, from = 0, to = 50, bw = 60 * 0.02)$y, 0)) %>%
+  group_by(Species) %>% # Standardise area with Riemann sum (avoid manually added y[1]).
+  mutate(x = x * 25 / ( sum(x) * ( y[3] - y[2] ) )) %>%
+  ungroup() %T>%
+  print()
 
+mu_dens <- Pm_prior_posterior %>%
+  group_by(Species) %>%
+  reframe(x = c(0, density(exp(log_mu_mu), n = 2^10, from = 0, to = 49, bw = 42 * 0.02)$x, 49),
+          y = c(0, density(exp(log_mu_mu), n = 2^10, from = 0, to = 49, bw = 42 * 0.02)$y, 0)) %>%
+  group_by(Species) %>%
+  mutate(y = y * 25 / ( sum(y) * ( x[3] - x[2] ) )) %>%
+  ungroup() %T>%
+  print()
 
-# 8.1.2 Figure 1b ####
-P
-Pl_prediction
-Pl_prior_posterior
+tau_dens <- Pm_prior_posterior %>%
+  group_by(Species) %>%
+  reframe(y = c(0, density(exp(log_tau_mu), n = 2^10, from = 0, to = 10, bw = 60 * 0.02)$x, 10),
+          x = c(0, density(exp(log_tau_mu), n = 2^10, from = 0, to = 10, bw = 60 * 0.02)$y, 0)) %>%
+  group_by(Species) %>%
+  mutate(x = x * 25 / ( sum(x) * ( y[3] - y[2] ) )) %>%
+  ungroup() %T>%
+  print()
 
-# 8.1.3 Combine panels ####
+Fig_1 <- Pm_prediction %>%
+  filter(Species != "Prior") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_violin(data = P %>%
+                  mutate(Species = Species %>% fct_relevel("Halophila ovalis")),
+                aes(Day, Pm, fill = Species, group = ID),
+                alpha = 0.7, position = "identity", 
+                width = 3, colour = NA) +
+    geom_ribbon(aes(Day, ymin = Pm.lower, ymax = Pm.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Day, Pm, colour = Species)) +
+    geom_polygon(data = alpha_dens %>% filter(Species != "Prior"),
+                 aes(-(x+1.2), y, fill = Species), colour = NA) +
+    geom_polygon(data = mu_dens %>% filter(Species != "Prior"),
+                 aes(x, y-10, fill = Species), colour = NA) +
+    geom_polygon(data = tau_dens %>% filter(Species != "Prior"),
+                 aes(x+42, -y, fill = Species), colour = NA) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518"), guide = "none") +
+    scale_fill_manual(values = c("#bdd268", "#4a7518"), guide = "none") +
+    scale_alpha_manual(values = c(0.5, 0.4, 0.3), guide = "none") +
+    scale_x_continuous(breaks = seq(0, 42, by = 7)) +
+    scale_y_continuous(breaks = seq(-10, 50, by = 10),
+                       labels = scales::label_number(style_negative = "minus")) +
+    facet_grid(NA ~ Species, switch = "y") +
+    labs(y = expression(italic(P)["max"]*" (µmol O"[2]*" g"^-1*" h"^-1*")"),
+         x = "Detrital age (days)") +
+    coord_cartesian(xlim = c(0, 42), ylim = c(-10, 50), 
+                    expand = FALSE, clip = "off") +
+    mytheme +
+    theme(strip.text = element_text(face = "italic"),
+          strip.text.y = element_text(colour = "transparent"),
+          panel.spacing.x = unit(1.5, "cm"),
+          plot.margin = margin(0.2, 1.5, 0.2, 0.2, unit = "cm"))
 
+Fig_1
+
+Fig_1 %>%
+  ggsave(filename = "Fig_1.pdf", path = "Figures",
+         device = cairo_pdf, height = 8, width = 20, units = "cm")
 
 # 8.2 Figure S1 ####
 # 8.2.1 Figure S1a ####
+# Here I need to plot separately because of P
+require(ggdensity) # bivariate density
+Fig_S1a_O2 <- Pm_confound_prediction %>%
+  filter(Species != "Prior" & Confounder == "O2") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_hdr(data = P %>% group_by(ID) %>% mutate(O2 = sample(O2)), # randomly reshuffle within ID
+             aes(O2, Pm, group = ID, fill = Species), colour = NA,
+             n = 500, method = "mvnorm", probs = 0.999,
+             position = "identity") +
+    geom_ribbon(aes(Predictor, ymin = Pm_mu.lower, ymax = Pm_mu.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Predictor, Pm_mu, colour = Species)) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518")) +
+    scale_fill_manual(values = c("#bdd268", "#4a7518")) +
+    scale_alpha_manual(values = c(0.7, 0.5, 0.4, 0.3), guide = "none") + # first alpha is for geom_hdr
+    scale_x_continuous(breaks = seq(210, 250, 20)) +
+    scale_y_continuous(breaks = seq(-10, 50, by = 10),
+                       labels = scales::label_number(style_negative = "minus")) +
+    # facet_grid(rows = vars(Species)) +
+    labs(y = expression(italic(P)["max"]*" (µmol O"[2]*" g"^-1*" h"^-1*")"),
+         x = expression("Initial O"[2]*" (µM)")) +
+    coord_cartesian(ylim = c(-10, 50), xlim = c(210, 250), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(plot.margin = margin(0.2, 1, 0.2, 0.2, unit = "cm"),
+          legend.text = element_text(face = "italic"))
 
+Fig_S1a_O2
 
-Pm_confound_prior_posterior <- Pm_confound_posterior %>%
-  bind_rows(Pm_confound_prior) %>%
-  mutate(.value = P_summary %$% case_when( # reverse standardisation
-    .variable == "beta_O2" ~ .value / sd(O2_mean), # this typically involves multiplying by sd
-    .variable == "beta_T" ~ .value / sd(T_mean), # but because this is a slope, it's inverse
-    .variable == "beta_P" ~ .value / sd(P_mean),
-    .variable == "beta_S" ~ .value / sd(S),
-    .variable == "beta_M" ~ .value / sd(M),
-    .variable == "alpha" ~ .value
-  ))
+Fig_S1a_T <- Pm_confound_prediction %>%
+  filter(Species != "Prior" & Confounder == "T") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_hdr(data = P %>% group_by(ID) %>% mutate(Temperature = sample(Temperature)), # randomly reshuffle within ID
+             aes(Temperature, Pm, group = ID, fill = Species), colour = NA,
+             n = 500, method = "mvnorm", probs = 0.999,
+             position = "identity") +
+    geom_ribbon(aes(Predictor, ymin = Pm_mu.lower, ymax = Pm_mu.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Predictor, Pm_mu, colour = Species)) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518")) +
+    scale_fill_manual(values = c("#bdd268", "#4a7518")) +
+    scale_alpha_manual(values = c(0.7, 0.5, 0.4, 0.3), guide = "none") + # first alpha is for geom_hdr
+    scale_x_continuous(breaks = seq(16, 20, 2)) +
+    labs(x = "Temp. (°C)") +
+    coord_cartesian(ylim = c(-10, 50), xlim = c(16, 20), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.text.y = element_blank(), # Emulate faceting
+          axis.title.y = element_blank(),
+          axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.margin = margin(0.2, 1, 0.2, 0, unit = "cm"),
+          legend.text = element_text(face = "italic"))
+
+Fig_S1a_T
+
+Fig_S1a_P <- Pm_confound_prediction %>%
+  filter(Species != "Prior" & Confounder == "P") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_violin(data = P,
+                aes(Pressure, Pm, fill = Species, group = ID),
+                alpha = 0.7, position = "identity", 
+                width = 7, colour = NA) +
+    geom_ribbon(aes(Predictor, ymin = Pm_mu.lower, ymax = Pm_mu.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Predictor, Pm_mu, colour = Species)) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518")) +
+    scale_fill_manual(values = c("#bdd268", "#4a7518")) +
+    scale_alpha_manual(values = c(0.5, 0.4, 0.3), guide = "none") +
+    scale_x_continuous(breaks = seq(1000, 1030, 15)) +
+    labs(x = "Pressure (hPa)") +
+    coord_cartesian(ylim = c(-10, 50), xlim = c(1000, 1030), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.text.y = element_blank(), # Emulate faceting
+          axis.title.y = element_blank(),
+          axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.margin = margin(0.2, 1, 0.2, 0, unit = "cm"),
+          legend.text = element_text(face = "italic"))
+
+Fig_S1a_P
+
+Fig_S1a_S <- Pm_confound_prediction %>%
+  filter(Species != "Prior" & Confounder == "S") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_violin(data = P,
+                aes(Salinity, Pm, fill = Species, group = ID),
+                alpha = 0.7, position = "identity", 
+                width = 0.5, colour = NA) +
+    geom_ribbon(aes(Predictor, ymin = Pm_mu.lower, ymax = Pm_mu.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Predictor, Pm_mu, colour = Species)) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518")) +
+    scale_fill_manual(values = c("#bdd268", "#4a7518")) +
+    scale_alpha_manual(values = c(0.5, 0.4, 0.3), guide = "none") +
+    scale_x_continuous(breaks = 34:36) +
+    labs(x = "Salinity (‰)") +
+    coord_cartesian(ylim = c(-10, 50), xlim = c(34, 36), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.text.y = element_blank(), # Emulate faceting
+          axis.title.y = element_blank(),
+          axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.margin = margin(0.2, 1, 0.2, 0, unit = "cm"),
+          legend.text = element_text(face = "italic"))
+
+Fig_S1a_S
+
+Fig_S1a_M <- Pm_confound_prediction %>%
+  filter(Species != "Prior" & Confounder == "M") %>%
+  ggplot() +
+    geom_hline(yintercept = 0) +
+    geom_violin(data = P,
+                aes(Mass, Pm, fill = Species, group = ID),
+                alpha = 0.7, position = "identity", 
+                width = 0.4, colour = NA) +
+    geom_ribbon(aes(Predictor, ymin = Pm_mu.lower, ymax = Pm_mu.upper,
+                    alpha = factor(.width), fill = Species)) +
+    geom_line(aes(Predictor, Pm_mu, colour = Species)) +
+    scale_colour_manual(values = c("#bdd268", "#4a7518")) +
+    scale_fill_manual(values = c("#bdd268", "#4a7518")) +
+    scale_alpha_manual(values = c(0.5, 0.4, 0.3), guide = "none") +
+    scale_x_continuous(breaks = seq(0, 1.5, 0.5),
+                       labels = scales::label_number(accuracy = c(1, 0.1, 1, 0.1))) +
+    labs(x = "Mass (g)") +
+    coord_cartesian(ylim = c(-10, 50), xlim = c(0, 1.5), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.text.y = element_blank(), # Emulate faceting
+          axis.title.y = element_blank(),
+          axis.line.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          plot.margin = margin(0.2, 0.5, 0.2, 0, unit = "cm"),
+          legend.text = element_text(face = "italic"))
+
+Fig_S1a_M
 
 # 8.2.2 Figure S1b ####
-Pm_confound_prediction
+Pm_confound_beta <- Pm_confound_prior_posterior %>%
+  select(-c(alpha, Pm_sigma)) %>%
+  pivot_longer(cols = -c(starts_with("."), Species),
+               names_to = "Parameter") %>%
+  filter(Species != "Prior") %>%
+  mutate(
+    Species = Species %>% fct_drop() %>%
+      fct_relevel("Amphibolis antarctica"),
+    Parameter = Parameter %>% 
+      fct_relevel("beta_O2", "beta_T", "beta_P", "beta_S", "beta_M"),
+    value = P_summary %$% case_when( # Reverse standardisation
+      Parameter == "beta_O2" ~ value / sd(O2_mean), # This typically involves multiplying by sd
+      Parameter == "beta_T" ~ value / sd(T_mean), # but because this is a slope, it's inverse
+      Parameter == "beta_P" ~ value / sd(P_mean),
+      Parameter == "beta_S" ~ value / sd(S),
+      Parameter == "beta_M" ~ value / sd(M)
+    )
+  ) %T>%
+  print()
 
+require(ggridges)
+Fig_S1b <- Pm_confound_beta %>%
+  ggplot() +
+    stat_density_ridges(aes(value, Species, fill = Species),
+                        colour = NA, n = 2^10, scale = 2, 
+                        from = c(-0.8, -8, -0.8, -8, -15),
+                        to = c(0.8, 8, 0.8, 8, 15),
+                        bandwidth = c(1.6, 16, 1.6, 16, 30)*0.02) +
+    geom_vline(xintercept = 0) +
+    geom_text(
+      data = tibble(
+        Parameter = Pm_confound_beta %$% levels(Parameter) %>% fct(),
+        label = c("italic(P)[max]", rep(NA, 4))
+      ),
+      aes(x = -1.84, y = 4, label = label),
+      family = "Futura", size = 12, size.unit = "pt",
+      hjust = 0, vjust = 1, parse = TRUE
+    ) +
+    scale_fill_manual(values = c("#4a7518", "#bdd268"),
+                      guide = guide_legend(reverse = TRUE)) +
+    facet_grid(
+      ~ Parameter, scales = "free",
+        labeller = labeller(
+          Parameter = as_labeller(
+            c("beta_O2" = "italic('β')['O'[2]]*' (µM'^-1*')'",
+              "beta_T" = "italic('β')['T']*' (°C'^-1*')'",
+              "beta_P" = "italic('β')['P']*' (hPa'^-1*')'",
+              "beta_S" = "italic('β')['Sal']*' (‰'^-1*')'",
+              "beta_M" = "italic('β')['Mass']*' (g'^-1*')'"),
+            label_parsed
+          )
+        )
+    ) +
+    # facet_grid2(
+    #   "Pmax" ~ Parameter, scales = "free", switch = "y",
+    #   strip = strip_nested(
+    #     text_y = element_text(angle = 0, hjust = 0, vjust = 1)
+    #   ),
+    #   labeller = labeller(
+    #     .rows = as_labeller(
+    #       c(Pmax = "italic(P)[max]"),
+    #       label_parsed
+    #     ),
+    #     Parameter = as_labeller(
+    #       c("beta_O2" = "italic('β')['O'[2]]*' (µM'^-1*')'",
+    #         "beta_T" = "italic('β')['T']*' (°C'^-1*')'",
+    #         "beta_P" = "italic('β')['P']*' (hPa'^-1*')'",
+    #         "beta_S" = "italic('β')['Sal']*' (‰'^-1*')'",
+    #         "beta_M" = "italic('β')['Mass']*' (g'^-1*')'"),
+    #       label_parsed
+    #     )
+    #   )
+    # ) +
+    facetted_pos_scales(
+      x = list(
+        Parameter == "beta_O2" ~ 
+          scale_x_continuous(limits = c(-0.8, 0.8),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.8, 0.8, by = 0.8),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Parameter == "beta_T" ~ 
+          scale_x_continuous(limits = c(-8, 8),
+                             oob = scales::oob_keep,
+                             breaks = seq(-8, 8, by = 8),
+                             labels = scales::label_number(style_negative = "minus")),
+        Parameter == "beta_P" ~ 
+          scale_x_continuous(limits = c(-0.8, 0.8),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.8, 0.8, by = 0.8),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Parameter == "beta_S" ~ 
+          scale_x_continuous(limits = c(-8, 8),
+                             oob = scales::oob_keep,
+                             breaks = seq(-8, 8, by = 8),
+                             labels = scales::label_number(style_negative = "minus")),
+        Parameter == "beta_M" ~ 
+          scale_x_continuous(limits = c(-15, 15),
+                             oob = scales::oob_keep,
+                             breaks = seq(-15, 15, by = 15),
+                             labels = scales::label_number(style_negative = "minus"))
+      )
+    ) +
+    coord_cartesian(ylim = c(1, 4), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank(),
+          legend.text = element_text(face = "italic"))
 
+Fig_S1b
+# Warnings are due to deliberate NAs in geom_text and can be safely ignored
 
 # 8.2.3 Figure S1c ####
+Pm_confound <- Pm_prior_posterior %>%
+  select(-c(ends_with("mu"), Pm_sigma)) %>%
+  pivot_longer(cols = -c(starts_with("."), Species),
+               names_to = "Parameter") %>%
+  separate(Parameter, into = c("Parameter", "Confounder"),
+           sep = "_(?=[^_]+$)") %>%
+  filter(Species != "Prior") %>%
+  mutate(
+    Species = Species %>% fct_drop() %>%
+      fct_relevel("Amphibolis antarctica"),
+    Parameter = Parameter %>% 
+      fct_relevel("log_alpha", "log_mu"),
+    Confounder = Confounder %>%
+      fct_relevel("O2", "T", "P", "S"),
+    value = P_summary %$% case_when( # Reverse standardisation as before
+      Confounder == "O2" ~ value / sd(O2_mean),
+      Confounder == "T" ~ value / sd(T_mean),
+      Confounder == "P" ~ value / sd(P_mean),
+      Confounder == "S" ~ value / sd(S),
+      Confounder == "M" ~ value / sd(M)
+    )
+  ) %T>%
+  print()
 
+# I cannot have completely free scales in facet_grid, so need
+# to plot separately.
+Fig_S1c_alpha <- Pm_confound %>%
+  filter(Parameter == "log_alpha") %>%
+  ggplot() +
+    stat_density_ridges(aes(value, Species, fill = Species),
+                        colour = NA, n = 2^10, scale = 2,
+                        from = c(-0.04, -2.5, -0.3, -5, -1.5),
+                        to = c(0.04, 2.5, 0.3, 5, 1.5),
+                        bandwidth = c(0.08, 5, 0.6, 10, 3)*0.02) +
+    geom_vline(xintercept = 0) +
+    geom_text(
+      data = tibble(
+        Confounder = Pm_confound %$% levels(Confounder) %>% fct(),
+        label = c("'ln '*italic('α')", rep(NA, 4))
+      ),
+      aes(x = -0.092, y = 4, label = label),
+      family = "Futura", size = 12, size.unit = "pt",
+      hjust = 0, vjust = 1, parse = TRUE
+    ) +
+    scale_fill_manual(values = c("#4a7518", "#bdd268"),
+                      guide = guide_legend(reverse = TRUE)) +
+    facet_grid(
+      ~ Confounder, scales = "free",
+        labeller = labeller(
+          Confounder = as_labeller(
+            c("O2" = "italic('β')['O'[2]]*' (µM'^-1*')'",
+              "T" = "italic('β')['T']*' (°C'^-1*')'",
+              "P" = "italic('β')['P']*' (hPa'^-1*')'",
+              "S" = "italic('β')['Sal']*' (‰'^-1*')'",
+              "M" = "italic('β')['Mass']*' (g'^-1*')'"),
+            label_parsed
+          )
+        )
+    ) +
+    # facet_grid2(
+    #   Parameter ~ Confounder, scales = "free", switch = "y",
+    #   strip = strip_nested(
+    #     text_y = element_text(angle = 0, hjust = 0, vjust = 1)
+    #   ),
+    #   labeller = labeller(
+    #     Confounder = as_labeller(
+    #       c("O2" = "italic('β')['O'[2]]*' (µM'^-1*')'",
+    #         "T" = "italic('β')['T']*' (°C'^-1*')'",
+    #         "P" = "italic('β')['P']*' (hPa'^-1*')'",
+    #         "S" = "italic('β')['Sal]*' (‰'^-1*')'",
+    #         "M" = "italic('β')['Mass']*' (g'^-1*')'"),
+    #       label_parsed
+    #     ),
+    #     Parameter = as_labeller(
+    #       c("log_alpha" = "'ln '*italic('α')",
+    #         "log_mu" = "'ln '*italic('μ')",
+    #         "log_tau" = "'ln '*italic('τ')"),
+    #       label_parsed
+    #     )
+    #   )
+    # ) +
+    facetted_pos_scales(
+      x = list(
+        Confounder == "O2" ~ 
+          scale_x_continuous(limits = c(-0.04, 0.04),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.04, 0.04, by = 0.04),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.01, 1, 0.01))),
+        Confounder == "T" ~ 
+          scale_x_continuous(limits = c(-2.5, 2.5),
+                             oob = scales::oob_keep,
+                             breaks = seq(-2.5, 2.5, by = 2.5),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Confounder == "P" ~ 
+          scale_x_continuous(limits = c(-0.3, 0.3),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.3, 0.3, by = 0.3),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Confounder == "S" ~ 
+          scale_x_continuous(limits = c(-5, 5),
+                             oob = scales::oob_keep,
+                             breaks = seq(-5, 5, by = 5),
+                             labels = scales::label_number(style_negative = "minus")),
+        Confounder == "M" ~ 
+          scale_x_continuous(limits = c(-1.5, 1.5),
+                             oob = scales::oob_keep,
+                             breaks = seq(-1.5, 1.5, by = 1.5),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1)))
+      )
+    ) +
+    coord_cartesian(ylim = c(1, 4), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank(),
+          legend.text = element_text(face = "italic"))
 
+Fig_S1c_alpha
 
-# 8.2.4 Figure S1d ####
-Pm_prediction_confound
+Fig_S1c_mu <- Pm_confound %>%
+  filter(Parameter == "log_mu") %>%
+  ggplot() +
+    stat_density_ridges(aes(value, Species, fill = Species),
+                        colour = NA, n = 2^10, scale = 2,
+                        from = c(-0.15, -1.5, -0.2, -6, -3),
+                        to = c(0.15, 1.5, 0.2, 6, 3),
+                        bandwidth = c(0.3, 3, 0.4, 12, 6)*0.02) +
+    geom_vline(xintercept = 0) +
+    geom_text(
+      data = tibble(
+        Confounder = Pm_confound %$% levels(Confounder) %>% fct(),
+        label = c("'ln '*italic('μ')", rep(NA, 4))
+      ),
+      aes(x = -0.345, y = 4, label = label),
+      family = "Futura", size = 12, size.unit = "pt",
+      hjust = 0, vjust = 1, parse = TRUE
+    ) +
+    scale_fill_manual(values = c("#4a7518", "#bdd268"),
+                      guide = guide_legend(reverse = TRUE)) +
+    facet_grid(
+      ~ Confounder, scales = "free",
+        labeller = labeller(
+          Confounder = as_labeller(
+            c("O2" = "italic('β')['O'[2]]*' (µM'^-1*')'",
+              "T" = "italic('β')['T']*' (°C'^-1*')'",
+              "P" = "italic('β')['P']*' (hPa'^-1*')'",
+              "S" = "italic('β')['Sal']*' (‰'^-1*')'",
+              "M" = "italic('β')['Mass']*' (g'^-1*')'"),
+            label_parsed
+          )
+        )
+    ) +
+    facetted_pos_scales(
+      x = list(
+        Confounder == "O2" ~ 
+          scale_x_continuous(limits = c(-0.15, 0.15),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.15, 0.15, by = 0.15),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.01, 1, 0.01))),
+        Confounder == "T" ~ 
+          scale_x_continuous(limits = c(-1.5, 1.5),
+                             oob = scales::oob_keep,
+                             breaks = seq(-1.5, 1.5, by = 1.5),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Confounder == "P" ~ 
+          scale_x_continuous(limits = c(-0.2, 0.2),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.2, 0.2, by = 0.2),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Confounder == "S" ~ 
+          scale_x_continuous(limits = c(-6, 6),
+                             oob = scales::oob_keep,
+                             breaks = seq(-6, 6, by = 6),
+                             labels = scales::label_number(style_negative = "minus")),
+        Confounder == "M" ~ 
+          scale_x_continuous(limits = c(-3, 3),
+                             oob = scales::oob_keep,
+                             breaks = seq(-3, 3, by = 3),
+                             labels = scales::label_number(style_negative = "minus"))
+      )
+    ) +
+    coord_cartesian(ylim = c(1, 4), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank(),
+          legend.text = element_text(face = "italic"))
+
+Fig_S1c_mu
+
+Fig_S1c_tau <- Pm_confound %>%
+  filter(Parameter == "log_tau") %>%
+  ggplot() +
+    stat_density_ridges(aes(value, Species, fill = Species),
+                        colour = NA, n = 2^10, scale = 2,
+                        from = c(-0.5, -4, -0.5, -7, -12),
+                        to = c(0.5, 4, 0.5, 7, 12),
+                        bandwidth = c(1, 8, 1, 14, 24)*0.02) +
+    geom_vline(xintercept = 0) +
+    geom_text(
+      data = tibble(
+        Confounder = Pm_confound %$% levels(Confounder) %>% fct(),
+        label = c("'ln '*italic('τ')", rep(NA, 4))
+      ),
+      aes(x = -1.15, y = 4, label = label),
+      family = "Futura", size = 12, size.unit = "pt",
+      hjust = 0, vjust = 1, parse = TRUE
+    ) +
+    scale_fill_manual(values = c("#4a7518", "#bdd268"),
+                      guide = guide_legend(reverse = TRUE)) +
+    facet_grid(
+      ~ Confounder, scales = "free",
+        labeller = labeller(
+          Confounder = as_labeller(
+            c("O2" = "italic('β')['O'[2]]*' (µM'^-1*')'",
+              "T" = "italic('β')['T']*' (°C'^-1*')'",
+              "P" = "italic('β')['P']*' (hPa'^-1*')'",
+              "S" = "italic('β')['Sal']*' (‰'^-1*')'",
+              "M" = "italic('β')['Mass']*' (g'^-1*')'"),
+            label_parsed
+          )
+        )
+    ) +
+    facetted_pos_scales(
+      x = list(
+        Confounder == "O2" ~ 
+          scale_x_continuous(limits = c(-0.5, 0.5),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.5, 0.5, by = 0.5),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Confounder == "T" ~ 
+          scale_x_continuous(limits = c(-4, 4),
+                             oob = scales::oob_keep,
+                             breaks = seq(-4, 4, by = 4),
+                             labels = scales::label_number(style_negative = "minus")),
+        Confounder == "P" ~ 
+          scale_x_continuous(limits = c(-0.5, 0.5),
+                             oob = scales::oob_keep,
+                             breaks = seq(-0.5, 0.5, by = 0.5),
+                             labels = scales::label_number(style_negative = "minus",
+                                                           accuracy = c(0.1, 1, 0.1))),
+        Confounder == "S" ~ 
+          scale_x_continuous(limits = c(-7, 7),
+                             oob = scales::oob_keep,
+                             breaks = seq(-7, 7, by = 7),
+                             labels = scales::label_number(style_negative = "minus")),
+        Confounder == "M" ~ 
+          scale_x_continuous(limits = c(-12, 12),
+                             oob = scales::oob_keep,
+                             breaks = seq(-12, 12, by = 12),
+                             labels = scales::label_number(style_negative = "minus"))
+      )
+    ) +
+    coord_cartesian(ylim = c(1, 4), expand = FALSE, clip = "off") +
+    mytheme +
+    theme(axis.title = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank(),
+          legend.text = element_text(face = "italic"))
+
+Fig_S1c_tau
+
+# 8.2.4 Combine panels ####
+require(patchwork)
+Fig_S1 <- (
+  ( Fig_S1a_O2 | 
+      (Fig_S1a_T + theme(legend.position = "none")) | 
+      (Fig_S1a_P + theme(legend.position = "none")) | 
+      (Fig_S1a_S + theme(legend.position = "none")) | 
+      (Fig_S1a_M + theme(legend.position = "none")) ) /
+    (Fig_S1b + theme(legend.position = "none")) / 
+    (Fig_S1c_alpha + theme(legend.position = "none",
+                           strip.text = element_blank())) / 
+    (Fig_S1c_mu + theme(legend.position = "none",
+                        strip.text = element_blank())) / 
+    (Fig_S1c_tau + theme(legend.position = "none",
+                         strip.text = element_blank()))
+) +
+  plot_layout(heights = c(1, rep(0.25, 4)))
+
+Fig_S1 %>%
+  ggsave(filename = "Fig_S1.pdf", path = "Figures",
+         device = cairo_pdf, height = 18, width = 20, units = "cm")
 
 # 9. Table 1 ####
 require(glue)
