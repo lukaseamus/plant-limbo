@@ -2438,7 +2438,7 @@ Fig_0b
 Fig_0 <- ( Fig_0a | plot_spacer() | Fig_0b ) +
   plot_layout(widths = c(1, 0.15, 1)) +
   plot_annotation(
-    title = "How long can detritus photosynthesise and how affected is decomposition?",
+    title = "How long can detritus photosynthesise and how affected is its decomposition?",
   ) &
   theme(plot.title = element_text(family = "Futura",
                                   size = 12, face = "bold"))
