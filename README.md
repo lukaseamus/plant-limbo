@@ -1,5 +1,5 @@
-# Plants in limbo —— only macroalgal detritus can remain viable for months
-Repository accompanying Research in Context submission to special issue Plant Senescence in *Annals of Botany*
+# Plants in limbo —— the theory of detrital photosynthesis
+Repository accompanying *Theories* article in *Quantitative Plant Biology*
 
 This reporsitory contains two folders, one for the research component (`Seagrass`) and one for the context component (`Meta-analysis`):
 
