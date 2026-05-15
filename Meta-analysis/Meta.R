@@ -2277,8 +2277,129 @@ Fig_3 %>%
   ggsave(filename = "Fig_3.pdf", path = "Figures",
          device = cairo_pdf, height = 18, width = 20, units = "cm")
 
-# 4.3 Figure S2 ####
-# 4.3.1 Figure S2a ####
+# 4.3 Figure 4 ####
+# This figure is a schematic which is mostly illustrated in Affinity Designer.
+# The following plots make up the simple data component of the schematic.
+
+# 4.3.1 Figure 4a ####
+meta_prediction_group <- here("Meta-analysis", "RDS", "meta_prediction_group.rds") %>%
+  read_rds() %T>%
+  print()
+
+Fig_4a <- meta_prediction_group %>%
+  filter(Group != "Prior" & .width == 0.5) %>%
+  ggplot() +
+    geom_line(aes(Day, Ratio, colour = Group)) +
+    scale_x_continuous(position = "top", breaks = seq(0, 100, 10)) +
+    scale_colour_manual(values = c("#004237", "#81a512", "#00a88f", "#a29400")) +
+    labs(x = "Detrital age (days)",
+         y = "Photosynthesis") +
+    coord_cartesian(xlim = c(0, 100), expand = F) +
+    mytheme +
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank())
+
+Fig_4a
+
+Fig_4a_simple <- meta_prediction_group %>%
+  filter(Group != "Prior" & .width == 0.5) %>%
+  ggplot() +
+    geom_slab(aes(x = Day, y = Group %>% fct_rev(), slab_alpha = Ratio, fill = Group), 
+              thickness = 1, fill_type = "gradient") +
+    annotate("text", x = 100, y = 4.5:1.5,
+             label = c("Terrestrial plants", "Freshwater plants", 
+                       "Seagrasses", "Seaweeds"),
+             hjust = 1, size.unit = "pt", size = 12, family = "Futura") +
+    scale_x_continuous(position = "top", breaks = seq(0, 100, 10)) +
+    scale_fill_manual(values = c("#004237", "#81a512", "#00a88f", "#a29400"),
+                      guide = "none") +
+    guides(slab_alpha = "none") +
+    labs(x = "Detrital age (days)",
+         y = "Photosynthesis") +
+    coord_cartesian(xlim = c(0, 100), expand = F) +
+    mytheme +
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank())
+
+Fig_4a_simple
+
+# 4.3.2 Figure 4b ####
+halflife_prior_posterior_group <- here("Meta-analysis", "RDS", "halflife_prior_posterior_group.rds") %>%
+  read_rds() %T>%
+  print()
+
+decay <- halflife_prior_posterior_group %>%
+  mutate(k = log(2) / Halflife) %>%
+  summarise(k = median(k), .by = Group) %>%
+  expand_grid(Day = seq(0, 100, length.out = 200)) %>%
+  mutate(Ratio = exp(-k * Day)) %T>% # Simple exponential decay of m/m0
+  print()
+
+Fig_4b <- decay %>%
+  filter(Group != "Prior") %>%
+  ggplot() +
+    geom_line(aes(Day, Ratio, colour = Group)) +
+    scale_x_continuous(position = "top", breaks = seq(0, 100, 10)) +
+    scale_colour_manual(values = c("#004237", "#81a512", "#00a88f", "#a29400")) +
+    labs(x = "Detrital age (days)",
+         y = "Detrital mass") +
+    coord_cartesian(xlim = c(0, 100), expand = F) +
+    mytheme +
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank())
+
+Fig_4b
+
+Fig_4b_simple <- decay %>%
+  filter(Group != "Prior") %>%
+  ggplot() +
+    geom_slab(aes(x = Day, y = Group %>% fct_rev(), slab_alpha = Ratio, fill = Group), 
+              thickness = 1, fill_type = "gradient") +
+    # annotate("text", x = 100, y = 4.5:1.5,
+    #          label = c("Terrestrial plants", "Freshwater plants", 
+    #                    "Seagrasses", "Seaweeds"),
+    #          hjust = 1, vjust = 0.5, size.unit = "pt", size = 12, family = "Futura") +
+    scale_x_continuous(position = "top", breaks = seq(0, 100, 10)) +
+    scale_fill_manual(values = c("#004237", "#81a512", "#00a88f", "#a29400"),
+                      guide = "none") +
+    guides(slab_alpha = "none") +
+    labs(x = "Detrital age (days)",
+         y = "Detrital mass") +
+    coord_cartesian(xlim = c(0, 100), expand = F) +
+    mytheme +
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.line.y = element_blank())
+
+Fig_4b_simple
+
+# 4.3.3 Combine panels ####
+Fig_4 <- Fig_4a / 
+  Fig_4b + theme(legend.position = "none",
+                 axis.text.x = element_blank(),
+                 axis.ticks.x = element_blank(),
+                 axis.line.x = element_blank(),
+                 axis.title.x = element_blank())
+Fig_4
+
+Fig_4_simple <- Fig_4a_simple /
+  Fig_4b_simple + theme(legend.position = "none",
+                        axis.text.x = element_blank(),
+                        axis.ticks.x = element_blank(),
+                        axis.line.x = element_blank(),
+                        axis.title.x = element_blank())
+Fig_4_simple
+
+Fig_4_simple %>%
+  ggsave(filename = "Fig_4_data.pdf", path = "Figures",
+         device = cairo_pdf, height = 8.5, width = 20, units = "cm")
+
+
+# 4.4 Figure S2 ####
+# 4.4.1 Figure S2a ####
 # Present contrasts as fractions
 fracs <- c(
   "Seaweed_Seagrass" = "frac(Seaweeds, Seagrasses)",
@@ -2329,7 +2450,7 @@ Fig_S2a <- meta_contrast %>%
 
 Fig_S2a
 
-# 4.3.2 Figure S2b ####
+# 4.4.2 Figure S2b ####
 Fig_S2b <- halflife_contrast %>%
   ggplot() +
     stat_density_ridges(
@@ -2370,7 +2491,7 @@ Fig_S2b <- halflife_contrast %>%
 
 Fig_S2b
 
-# 4.3.3 Combine panels ####
+# 4.4.3 Combine panels ####
 Fig_S2 <- ( Fig_S2a | plot_spacer() | Fig_S2b + 
               theme(axis.text.y = element_blank(),
                     legend.position = "none") ) +
@@ -2381,7 +2502,7 @@ Fig_S2 %>%
   ggsave(filename = "Fig_S2.pdf", path = "Figures",
          device = cairo_pdf, height = 12, width = 20, units = "cm")
 
-# 4.4 Graphical abstract ####
+# 4.5 Graphical abstract ####
 Fig_0a <- mu_vs_halflife %>%
   filter(!Group %in% c("Prior", "Global")) %>%
   ggplot() +
