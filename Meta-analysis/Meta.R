@@ -2509,6 +2509,12 @@ Fig_0a <- mu_vs_halflife %>%
     stat_gradientinterval(aes(mu, Group %>% fct_rev(), fill = Group),
                           n = 2^10, show_point = FALSE,
                           show_interval = FALSE) +
+    geom_crossbar(
+      data = . %>%
+        summarise(median = median(mu), .by = Group),
+      aes(median, Group %>% fct_rev()), xmin = NA, xmax = NA,
+      colour = "black", middle.linewidth = 0.5
+    ) +
     scale_fill_manual(values = c("#004237", "#81a512", "#00a88f", "#a29400"), 
                       guide = "none") +
     scale_x_log10(breaks = c(1, 7, 30, 365),
@@ -2539,10 +2545,19 @@ Fig_0b <- mu_vs_halflife %>%
     stat_gradientinterval(aes(ratio, Group %>% fct_rev(), fill = Group),
                           n = 2^10, show_point = FALSE,
                           show_interval = FALSE) +
+    geom_crossbar(
+      data = . %>%
+        summarise(median = median(ratio), .by = Group),
+      aes(median, Group %>% fct_rev()), xmin = NA, xmax = NA,
+      colour = "black", middle.linewidth = 0.5
+    ) +
     # geom_vline(xintercept = 10^0) +
     scale_fill_manual(values = c("#004237", "#81a512", "#00a88f", "#a29400"), 
                       guide = "none") +
-    scale_x_log10(breaks = 10^c(-2, 0, 2),
+    # ratio = 1 means that detrital and photosynthetic half-lives are equally long.
+    # I set qualitative breaks "scarcely" and "partly" for ratio < 1 and "fully" for
+    # ratio > 1. Breaks are adjusted for readability.
+    scale_x_log10(breaks = 10^c(-1.8, -0.5, 0.5),
                   labels = c("Scarcely", "Partly", "Fully")) +
     coord_cartesian(xlim = 10^c(-2, 2), clip = "off") +
     mytheme +
@@ -2561,8 +2576,11 @@ Fig_0 <- ( Fig_0a | plot_spacer() | Fig_0b ) +
   plot_annotation(
     title = "How long can detritus photosynthesise and how affected is its decomposition?",
   ) &
-  theme(plot.title = element_text(family = "Futura",
-                                  size = 12, face = "bold"))
+  theme(
+    plot.title = element_text(family = "Futura", size = 12, face = "bold",
+                              margin = margin(b = -0.2, unit = "cm")),
+    plot.margin = margin(0.2, 0.3, 0.07, 0.07, unit = "cm")
+  )
 Fig_0
 
 Fig_0 %>%
