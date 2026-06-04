@@ -2282,10 +2282,6 @@ Fig_3 %>%
 # The following plots make up the simple data component of the schematic.
 
 # 4.3.1 Figure 4a ####
-meta_prediction_group <- here("Meta-analysis", "RDS", "meta_prediction_group.rds") %>%
-  read_rds() %T>%
-  print()
-
 Fig_4a <- meta_prediction_group %>%
   filter(Group != "Prior" & .width == 0.5) %>%
   ggplot() +
@@ -2326,10 +2322,6 @@ Fig_4a_simple <- meta_prediction_group %>%
 Fig_4a_simple
 
 # 4.3.2 Figure 4b ####
-halflife_prior_posterior_group <- here("Meta-analysis", "RDS", "halflife_prior_posterior_group.rds") %>%
-  read_rds() %T>%
-  print()
-
 decay <- halflife_prior_posterior_group %>%
   mutate(k = log(2) / Halflife) %>%
   summarise(k = median(k), .by = Group) %>%
@@ -2559,7 +2551,7 @@ Fig_0b <- mu_vs_halflife %>%
     # ratio > 1. Breaks are adjusted for readability.
     scale_x_log10(breaks = 10^c(-1.8, -0.5, 0.5),
                   labels = c("Scarcely", "Partly", "Fully")) +
-    coord_cartesian(xlim = 10^c(-2, 2), clip = "off") +
+    coord_cartesian(xlim = 10^c(-2, 2.5), clip = "off") +
     mytheme +
     theme(axis.text.x = element_text(size = 12),
           axis.text.y = element_blank(),
@@ -2579,7 +2571,7 @@ Fig_0 <- ( Fig_0a | plot_spacer() | Fig_0b ) +
   theme(
     plot.title = element_text(family = "Futura", size = 12, face = "bold",
                               margin = margin(b = -0.2, unit = "cm")),
-    plot.margin = margin(0.2, 0.3, 0.07, 0.07, unit = "cm")
+    plot.margin = margin(0.2, 0.07, 0.07, 0.07, unit = "cm")
   )
 Fig_0
 
