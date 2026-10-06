@@ -1,3 +1,4 @@
+[![DOI](https://zenodo.org/badge/951712766.svg)](https://doi.org/10.5281/zenodo.23182864)
 # Plants in limbo —— the theory of detrital photosynthesis
 Repository accompanying *Theories* article in *Quantitative Plant Biology*
 
