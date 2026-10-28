@@ -112,6 +112,7 @@ meta_prediction <- meta_prior_posterior %>%
 # Data points
 meta_points <- meta %>% 
   filter(Day > 0 & Ratio < 1.04) %>% # remove day 0 and ratios outside plot
+  arrange(Group, desc(Day), Ratio) %>% # sort so points don't have far to move
   mutate(
     alpha = .1, # Low baseline transparency because there are many points
     colour = case_when( # Colours
