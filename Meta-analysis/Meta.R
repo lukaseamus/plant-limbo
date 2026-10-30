@@ -2389,7 +2389,6 @@ Fig_4_simple %>%
   ggsave(filename = "Fig_4_data.pdf", path = "Figures",
          device = cairo_pdf, height = 8.5, width = 20, units = "cm")
 
-
 # 4.4 Figure S2 ####
 # 4.4.1 Figure S2a ####
 # Present contrasts as fractions
@@ -2494,7 +2493,170 @@ Fig_S2 %>%
   ggsave(filename = "Fig_S2.pdf", path = "Figures",
          device = cairo_pdf, height = 12, width = 20, units = "cm")
 
-# 4.5 Graphical abstract ####
+# 4.5 Figure S3 ####
+# 4.5.1 Figure S3a ####
+# Predict on log scale
+meta_prediction_log <- meta_prior_posterior_group %>%
+  # alpha is identical for all levels of Light and Response
+  filter(Group == "Prior" |
+           Light == "Yes" & Response == "Chlorophyll") %>%
+  select(starts_with("."), Group, alpha, sigma) %>%
+  mutate(mu = exp(alpha)) %>% # the group mean of mu is just exp(alpha)
+  expand_grid(
+    Day = exp(
+      seq( log(1/24/60/60) , log(36500) , length.out = 400 )
+    )
+  ) %>%
+  mutate(
+    Ratio_mu = plogis( -5 / mu * ( Day - mu ) ),
+    Ratio = rlnorm( n() , log(Ratio_mu) , sigma )
+  ) %>%
+  # below is a longer but much much (!) more efficient version of 
+  # group_by(Day, Treatment) %>% 
+  # tidybayes::median_qi(Ratio_mu, Ratio, .width = c(.5, .8, .9))
+  summarise(
+    across(
+      c(Ratio_mu, Ratio),
+      list(median = median, 
+           lower_0.5 = ~ qi(.x, .width = .5)[1],
+           upper_0.5 = ~ qi(.x, .width = .5)[2],
+           lower_0.8 = ~ qi(.x, .width = .8)[1],
+           upper_0.8 = ~ qi(.x, .width = .8)[2],
+           lower_0.9 = ~ qi(.x, .width = .9)[1],
+           upper_0.9 = ~ qi(.x, .width = .9)[2]),
+      .names = "{.col}.{.fn}"
+    ),
+    .by = c(Day, Group)
+  ) %>%
+  rename(Ratio_mu = Ratio_mu.median, Ratio = Ratio.median) %>%
+  pivot_longer(cols = contains("lower") | contains("upper")) %>%
+  separate(col = name, into = c("name", ".width"), sep = "_(?=[^_]*$)") %>%
+  pivot_wider(names_from = name, values_from = value) %T>%
+  print()
+
+# Plot on log scale
+Fig_S3a <- meta_prediction_log %>%
+  filter(Group != "Prior" & .width == 0.5) %>% # I only want medians, not intervals
+  ggplot() +
+    geom_point(
+      data = meta %>% filter(Day > 0 & Ratio < 1.008), # Day = 0 is just Ratio = 1
+      aes(Day, Ratio, colour = Group, shape = Water),
+      size = 2.4, alpha = .1
+    ) +
+    geom_line(aes(Day, Ratio_mu, colour = Group)) +
+    scale_colour_manual(
+      values = c("#004237", "#81a512", "#00a88f", "#a29400"),
+      labels = c(
+        "Terrestrial plants", 
+        "Freshwater plants", 
+        "Seagrasses", 
+        "Seaweeds"
+      )
+    ) +
+    scale_shape_manual(
+      values = c(16, 17),
+      labels = c("Water", "No water"),
+      guide = guide_legend(
+        override.aes = list(
+          shape = c(1, 2), alpha = 1
+        )
+      )
+    ) +
+    scale_x_log10(
+      breaks = c(1/24/60/60, 1/24/60, 1/24, 1, 7, 30, 365, 3650, 36500),
+      label = c("Second", "Minute", "Hour", "Day", "Week", "Month", 
+                "Year", "Decade", "Century")
+    ) +
+    scale_y_continuous(labels = scales::label_number(accuracy = c(1, 1e-2, 0.1, 1e-2, 1))) +
+    labs(x = "Detrital age", 
+         y = expression("Photosynthesis ("*italic(p)*"/"*italic(p)[0]*")")) +
+    coord_cartesian(xlim = c(1/24/60/60, 36500), ylim = c(0, 1), expand = F, clip = "off") +
+    mytheme +
+    theme(
+      plot.margin = margin(0.2, 0.7, 0.2, 0.2, unit = "cm"),
+      legend.position = c(.815, .63)
+    )
+
+Fig_S3a
+
+# 4.5.2 Figure S3b ####
+Fig_S3b <- meta_prior_posterior_group %>%
+  filter(Group != "Prior") %>%
+  ggplot() +
+    geom_density(
+      aes(mu, colour = Group), n = 2^10, 
+      bw = diff(c(log10(1/24/60/60), log10(36500))) * 0.02
+    ) +
+    scale_colour_manual(
+      values = c("#004237", "#81a512", "#00a88f", "#a29400"),
+      guide = "none"
+    ) +
+    scale_x_log10(
+      limits = c(1/24/60/60, 36500),
+      breaks = c(1/24/60/60, 1/24/60, 1/24, 1, 7, 30, 365, 3650, 36500),
+      label = c("Second", "Minute", "Hour", "Day", "Week", "Month", 
+                "Year", "Decade", "Century"),
+      oob = scales::oob_keep
+    ) +
+    labs(x = expression("Photosynthetic half-life ("*italic(μ)*")")) +
+    coord_cartesian(
+      expand = F, clip = "off", ylim = c(0, .5)
+    ) +
+    mytheme +
+    theme(
+      axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.line.y = element_blank(),
+      plot.margin = margin(0.2, 0.7, 0.2, 0.2, unit = "cm")
+    )
+
+Fig_S3b
+
+# 4.5.3 Figure S3c ####
+Fig_S3c <- halflife_prior_posterior_group %>%
+  filter(Group != "Prior") %>%
+  ggplot() +
+    geom_density(
+      aes(Halflife, colour = Group), n = 2^10, 
+      bw = diff(c(log10(1/24/60/60), log10(36500))) * 0.02
+    ) +
+    scale_colour_manual(
+      values = c("#004237", "#81a512", "#00a88f", "#a29400"),
+      guide = "none"
+    ) +
+    scale_x_log10(
+      limits = c(1/24/60/60, 36500),
+      breaks = c(1/24/60/60, 1/24/60, 1/24, 1, 7, 30, 365, 3650, 36500),
+      label = c("Second", "Minute", "Hour", "Day", "Week", "Month", 
+                "Year", "Decade", "Century"),
+      oob = scales::oob_keep
+    ) +
+    labs(x = expression("Detrital half-life ("*italic(t)["½"]*")")) +
+    coord_cartesian(
+      expand = F, clip = "off", ylim = c(0, .5)
+    ) +
+    mytheme +
+    theme(
+      axis.title.y = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.line.y = element_blank(),
+      plot.margin = margin(0.2, 0.7, 0.2, 0.2, unit = "cm")
+    )
+
+Fig_S3c
+
+# 4.5.4 Combine panels ####
+Fig_S3 <- ( Fig_S3a / Fig_S3b / Fig_S3c ) +
+  plot_layout(heights = c(1, 0.2, 0.2))
+Fig_S3
+
+Fig_S3 %>%
+  ggsave(filename = "Fig_S3.pdf", path = "Figures",
+         device = cairo_pdf, height = 12, width = 20, units = "cm")
+
+# 4.6 Graphical abstract ####
 Fig_0a <- mu_vs_halflife %>%
   filter(!Group %in% c("Prior", "Global")) %>%
   ggplot() +
